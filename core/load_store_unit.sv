@@ -508,6 +508,8 @@ module load_store_unit import ariane_pkg::*; #(
             {riscv::GPLEN{1'b0}},
             {riscv::XLEN{1'b0}},
             1'b0,
+            1'b0,
+            riscv::PRIV_LVL_M,
             1'b0
         };
         data_misaligned = 1'b0;
@@ -554,7 +556,9 @@ module load_store_unit import ariane_pkg::*; #(
                     {riscv::GPLEN{1'b0}},
                     lsu_ctrl.tinst,
                     ld_st_v_i,
-                    1'b1
+                    1'b1,
+                    riscv::PRIV_LVL_M,
+                    1'b0
                 };
 
             end else if (lsu_ctrl.fu == STORE) begin
@@ -564,7 +568,9 @@ module load_store_unit import ariane_pkg::*; #(
                     {riscv::GPLEN{1'b0}},
                     lsu_ctrl.tinst,
                     ld_st_v_i,
-                    1'b1
+                    1'b1,
+                    riscv::PRIV_LVL_M,
+                    1'b0
                 };
             end
         end
@@ -578,7 +584,9 @@ module load_store_unit import ariane_pkg::*; #(
                     {riscv::GPLEN{1'b0}},
                     lsu_ctrl.tinst,
                     ld_st_v_i,
-                    1'b1
+                    1'b1,
+                    riscv::PRIV_LVL_M,
+                    1'b0
                 };
 
             end else if (lsu_ctrl.fu == STORE) begin
@@ -588,7 +596,9 @@ module load_store_unit import ariane_pkg::*; #(
                     {riscv::GPLEN{1'b0}},
                     lsu_ctrl.tinst,
                     ld_st_v_i,
-                    1'b1
+                    1'b1,
+                    riscv::PRIV_LVL_M,
+                    1'b0
                 };
             end
         end
@@ -602,7 +612,9 @@ module load_store_unit import ariane_pkg::*; #(
                     {riscv::GPLEN{1'b0}},
                     lsu_ctrl.tinst,
                     ld_st_v_i,
-                    1'b1
+                    1'b1,
+                    riscv::PRIV_LVL_M,
+                    1'b0
                 };
 
             end else if (lsu_ctrl.fu == STORE) begin
@@ -612,7 +624,9 @@ module load_store_unit import ariane_pkg::*; #(
                     {riscv::GPLEN{1'b0}},
                     lsu_ctrl.tinst,
                     ld_st_v_i,
-                    1'b1
+                    1'b1,
+                    riscv::PRIV_LVL_M,
+                    1'b0
                 };
             end
         end
