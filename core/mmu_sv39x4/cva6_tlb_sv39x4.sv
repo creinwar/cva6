@@ -24,6 +24,8 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
   )(
     input  logic                    clk_i,    // Clock
     input  logic                    rst_ni,   // Asynchronous reset active low
+    input  logic [ariane_pkg::NUM_COLOURS-1:0] cur_clrs_i,  // Currently active colours
+    input  ariane_pkg::locked_tlb_entry_t[ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] locked_tlb_entries_i,  // Locked TLB entries
     input  logic                    flush_i,  // Flush normal translations signal
     input  logic                    flush_vvma_i,  // Flush vs stage signal
     input  logic                    flush_gvma_i,  // Flush g stage signal
@@ -63,6 +65,7 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
       logic                  s_st_enbl;   // s-stage translation
       logic                  g_st_enbl;   // g-stage translation
       logic                  v;           // virtualization mode
+      logic                  locked;      // Is this a locked entry?
       logic                  valid;
     } [TLB_ENTRIES-1:0] tags_q, tags_n;
 
@@ -70,6 +73,13 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
       riscv::pte_t pte;
       riscv::pte_t gpte;
     } [TLB_ENTRIES-1:0] content_q, content_n;
+
+    typedef enum logic[1:0] {
+        DISABLED    = 2'b00,
+        LEFT        = 2'b01,
+        RIGHT       = 2'b10,
+        BOTH        = 2'b11
+    } plru_node_state_t;
 
     logic [8:0] vpn0, vpn1;
     logic [riscv::GPPN2:0] vpn2;
@@ -81,6 +91,22 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
     logic [TLB_ENTRIES-1:0] is_2M;
     logic [TLB_ENTRIES-1:0] match_stage;
     riscv::pte_t   g_content;
+    riscv::pte_t [ariane_pkg::NUM_TLB_LOCK_WAYS] locked_g_content;
+
+    logic [TLB_ENTRIES-1:0] replacement_allowed;
+
+    // Figure out the currently writable TLB ways
+    // I.e. the set of non-locked TLB ways which are allowed by our colour set
+    always_comb begin
+        for(int unsigned i = 0; i < TLB_ENTRIES; i++) begin
+            if(i < ariane_pkg::NUM_TLB_LOCK_WAYS) begin
+                replacement_allowed[i] = cur_clrs_i[i] & ~locked_tlb_entries_i[i].valid;
+            end else begin
+                replacement_allowed[i] = cur_clrs_i[i];
+            end
+        end
+    end
+
     //-------------
     // Translation
     //-------------
@@ -259,11 +285,41 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
                     is_s_2M: update_i.is_s_2M,
                     is_g_1G: update_i.is_g_1G,
                     is_g_2M: update_i.is_g_2M,
+                    locked: 1'b0,
                     valid: 1'b1
                 };
                 // and content as well
                 content_n[i].pte = update_i.content;
                 content_n[i].gpte = update_i.g_content;
+            // locked entry
+            end else if (locked_tlb_entries_i[i].valid) begin
+                // Patch the locked PTE for the G stage to always have
+                // the u bit set
+                locked_g_content[i] = locked_tlb_entries_i[i].leaf_pte;
+                locked_g_content[i].u = 1'b1;
+                // update tag array
+                tags_n[i] = '{
+                    asid:       locked_tlb_entries_i[i].asid,
+                    vmid:       locked_tlb_entries_i[i].vmid,
+                    vpn2:       locked_tlb_entries_i[i].vpn[18+riscv::GPPN2:18],
+                    vpn1:       locked_tlb_entries_i[i].vpn [17:9],
+                    vpn0:       locked_tlb_entries_i[i].vpn [8:0],
+                    s_st_enbl:  locked_tlb_entries_i[i].s_st_enbl,
+                    g_st_enbl:  locked_tlb_entries_i[i].g_st_enbl,
+                    v:          locked_tlb_entries_i[i].virt_mode,
+                    is_s_1G:    locked_tlb_entries_i[i].size == GIGA_PAGE,
+                    is_s_2M:    locked_tlb_entries_i[i].size == MEGA_PAGE,
+                    is_g_1G:    locked_tlb_entries_i[i].size == GIGA_PAGE,
+                    is_g_2M:    locked_tlb_entries_i[i].size == MEGA_PAGE,
+                    locked:     1'b1,
+                    valid:      1'b1
+                };
+                // and content as well
+                content_n[i].pte    = locked_tlb_entries_i[i].leaf_pte;
+                content_n[i].gpte   = locked_g_content[i];
+            end else if (tags_q[i].locked & (!locked_tlb_entries_i[i].valid)) begin
+                tags_n[i].locked = 1'b0;
+                tags_n[i].valid = 1'b0;
             end
         end
     end
@@ -272,8 +328,37 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
     // PLRU - Pseudo Least Recently Used Replacement
     // -----------------------------------------------
     logic[2*(TLB_ENTRIES-1)-1:0] plru_tree_q, plru_tree_n;
+    plru_node_state_t [(TLB_ENTRIES-1)-1:0] plru_node_state_q, plru_node_state_d;
     always_comb begin : plru_replacement
+
+        // This configures the allowed directions per non-leaf node of the tree depending on the
+        // incoming colouring information
+        for(int unsigned n = 0; n < (TLB_ENTRIES-1); n++) begin
+
+            if(n < ((TLB_ENTRIES/2)-1)) begin
+                plru_node_state_d[n] = plru_node_state_t'({|plru_node_state_d[2*n+2], |plru_node_state_d[2*n+1]});
+
+            end else begin
+                automatic int unsigned bit_idx = n - ((TLB_ENTRIES/2) - 1);
+                automatic logic [1:0] n_st = (replacement_allowed >> 2*bit_idx);
+                plru_node_state_d[n] = plru_node_state_t'(n_st);
+            end
+        end
+
+        // By default keep the current tree
         plru_tree_n = plru_tree_q;
+
+        // But if the colour config was changed, re-init the tree
+        if (plru_node_state_d != plru_node_state_q) begin
+            for(int unsigned n = 0; n < (TLB_ENTRIES-1); n++) begin
+                if(plru_node_state_d[n] == RIGHT) begin
+                    plru_tree_n[n] = 1'b1;
+                end else begin
+                    plru_tree_n[n] = 1'b0;
+                end
+            end
+        end
+
         // The PLRU-tree indexing:
         // lvl0        0
         //            / \
@@ -308,7 +393,15 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
                   shift = $clog2(TLB_ENTRIES) - lvl;
                   // to circumvent the 32 bit integer arithmetic assignment
                   new_index =  ~((i >> (shift-1)) & 32'b1);
-                  plru_tree_n[idx_base + (i >> shift)] = new_index[0];
+
+                  // If the colouring allows it, we flip the current state
+                  if (plru_node_state_q[idx_base + (i >> shift)] == BOTH) begin
+                    plru_tree_n[idx_base + (i >> shift)] = new_index[0];
+                  end else if (plru_node_state_q[idx_base + (i >> shift)] == DISABLED) begin
+                    plru_tree_n[idx_base + (i >> shift)] = 1'b0;
+                  end else begin
+                    plru_tree_n[idx_base + (i >> shift)] = (plru_node_state_q[idx_base + (i >> shift)] == LEFT) ? 1'b0 : 1'b1;
+                  end
                 end
             end
         end
@@ -338,9 +431,9 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
                 // en &= plru_tree_q[idx_base + (i>>shift)] == ((i >> (shift-1)) & 1'b1);
                 new_index =  (i >> (shift-1)) & 32'b1;
                 if (new_index[0]) begin
-                  en &= plru_tree_q[idx_base + (i>>shift)];
+                  en &= plru_tree_q[idx_base + (i>>shift)] & (plru_node_state_q[idx_base + (i>>shift)] == BOTH || plru_node_state_q[idx_base + (i>>shift)] == RIGHT);
                 end else begin
-                  en &= ~plru_tree_q[idx_base + (i>>shift)];
+                  en &= ~plru_tree_q[idx_base + (i>>shift)] & (plru_node_state_q[idx_base + (i>>shift)] == BOTH || plru_node_state_q[idx_base + (i>>shift)] == LEFT);
                 end
             end
             replace_en[i] = en;
@@ -353,10 +446,12 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
             tags_q      <= '{default: 0};
             content_q   <= '{default: 0};
             plru_tree_q <= '{default: 0};
+            plru_node_state_q <= plru_node_state_t'('{default: 0});
         end else begin
             tags_q      <= tags_n;
             content_q   <= content_n;
             plru_tree_q <= plru_tree_n;
+            plru_node_state_q <= plru_node_state_d;
         end
     end
     //--------------

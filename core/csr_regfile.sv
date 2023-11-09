@@ -100,6 +100,9 @@ module csr_regfile import ariane_pkg::*; #(
     // Caches
     output logic                  icache_en_o,                // L1 ICache Enable
     output logic                  dcache_en_o,                // L1 DCache Enable
+    // Partitioning
+    output logic[ariane_pkg::NUM_COLOURS-1:0]   cur_clrs_o,   // Current allowed colours
+    output ariane_pkg::locked_tlb_entry_t [ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] locked_tlb_entries_o,   // Locked TLB entries
     // fence.t
     output logic [31:0]           fence_t_pad_o,              // Padding time of fence.t relative to time interrupt
     output logic                  fence_t_src_sel_o,          // Pad relative to selected source
@@ -194,6 +197,10 @@ module csr_regfile import ariane_pkg::*; #(
     riscv::envcfg_rv_t menvcfg_q, menvcfg_d;
     riscv::senvcfg_rv_t senvcfg_q, senvcfg_d;
 
+    logic [31:0] cur_clrs_q,  cur_clrs_d;
+    riscv::pte_t [ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] tlb_lock_pte_q, tlb_lock_pte_d;
+    ariane_pkg::tlb_lock_vpn_t [ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] tlb_lock_vpn_q, tlb_lock_vpn_d;
+    ariane_pkg::tlb_lock_id_t [ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] tlb_lock_id_q, tlb_lock_id_d;
     riscv::xlen_t dcache_q,    dcache_d;
     riscv::xlen_t icache_q,    icache_d;
     riscv::xlen_t fence_t_pad_q, fence_t_pad_d;
@@ -207,9 +214,27 @@ module csr_regfile import ariane_pkg::*; #(
     riscv::pmpcfg_t [15:0]    pmpcfg_q,  pmpcfg_d;
     logic [15:0][riscv::PLEN-3:0]        pmpaddr_q,  pmpaddr_d;
 
-
     assign pmpcfg_o = pmpcfg_q[15:0];
     assign pmpaddr_o = pmpaddr_q;
+
+    assign cur_clrs_o = cur_clrs_q;
+
+    // Assemble tlb lock entries
+    always_comb begin
+        for(int unsigned i = 0; i < NUM_TLB_LOCK_WAYS; i++) begin
+            locked_tlb_entries_o[i].leaf_pte    = tlb_lock_pte_q[i];
+            locked_tlb_entries_o[i].asid        =  tlb_lock_id_q[i].asid;
+            locked_tlb_entries_o[i].vmid        =  tlb_lock_id_q[i].vmid;
+            locked_tlb_entries_o[i].vpn         = tlb_lock_vpn_q[i].vpn;
+            locked_tlb_entries_o[i].g_st_enbl   = tlb_lock_vpn_q[i].g_st_enbl;
+            locked_tlb_entries_o[i].s_st_enbl   = tlb_lock_vpn_q[i].s_st_enbl;
+            locked_tlb_entries_o[i].data        = tlb_lock_vpn_q[i].data;
+            locked_tlb_entries_o[i].instr       = tlb_lock_vpn_q[i].instr;
+            locked_tlb_entries_o[i].virt_mode   = tlb_lock_vpn_q[i].virt_mode;
+            locked_tlb_entries_o[i].size        = tlb_lock_vpn_q[i].size;
+            locked_tlb_entries_o[i].valid       = tlb_lock_pte_q[i].v & (tlb_lock_vpn_q[i].size != INVALID) & tlb_lock_id_q[i].valid;
+        end
+    end
 
     riscv::fcsr_t fcsr_q, fcsr_d;
     // ----------------
@@ -585,6 +610,34 @@ module csr_regfile import ariane_pkg::*; #(
                 riscv::CSR_MHPM_COUNTER_29H,
                 riscv::CSR_MHPM_COUNTER_30H,
                 riscv::CSR_MHPM_COUNTER_31H :     if (riscv::XLEN == 32) csr_rdata = perf_data_i; else read_access_exception = 1'b1;
+                // Resource Partitioning - Supervisor level
+                // They are hidden in the VS mode
+                riscv::CSR_CUR_CLRS:         if(!v_q) csr_rdata = cur_clrs_q; else read_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_PTE_1:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 1 && !v_q) csr_rdata = tlb_lock_pte_q[0]; else read_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_VPN_1:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 1 && !v_q) csr_rdata = tlb_lock_vpn_q[0]; else read_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_ID_1:    if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 1 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[0]}; else read_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_PTE_2:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 2 && !v_q) csr_rdata = tlb_lock_pte_q[1]; else read_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_VPN_2:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 2 && !v_q) csr_rdata = tlb_lock_vpn_q[1]; else read_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_ID_2:    if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 2 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[1]}; else read_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_PTE_3:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 3 && !v_q) csr_rdata = tlb_lock_pte_q[2]; else read_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_VPN_3:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 3 && !v_q) csr_rdata = tlb_lock_vpn_q[2]; else read_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_ID_3:    if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 3 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[2]}; else read_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_PTE_4:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 4 && !v_q) csr_rdata = tlb_lock_pte_q[3]; else read_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_VPN_4:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 4 && !v_q) csr_rdata = tlb_lock_vpn_q[3]; else read_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_ID_4:    if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 4 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[3]}; else read_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_PTE_5:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 5 && !v_q) csr_rdata = tlb_lock_pte_q[4]; else read_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_VPN_5:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 5 && !v_q) csr_rdata = tlb_lock_vpn_q[4]; else read_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_ID_5:    if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 5 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[4]}; else read_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_PTE_6:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 6 && !v_q) csr_rdata = tlb_lock_pte_q[5]; else read_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_VPN_6:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 6 && !v_q) csr_rdata = tlb_lock_vpn_q[5]; else read_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_ID_6:    if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 6 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[5]}; else read_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_PTE_7:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 7 && !v_q) csr_rdata = tlb_lock_pte_q[6]; else read_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_VPN_7:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 7 && !v_q) csr_rdata = tlb_lock_vpn_q[6]; else read_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_ID_7:    if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 7 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[6]}; else read_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_PTE_8:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 8 && !v_q) csr_rdata = tlb_lock_pte_q[7]; else read_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_VPN_8:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 8 && !v_q) csr_rdata = tlb_lock_vpn_q[7]; else read_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_ID_8:    if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 8 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[7]}; else read_access_exception = 1'b1;
+
                 // custom (non RISC-V) cache control
                 riscv::CSR_DCACHE:           csr_rdata = dcache_q;
                 riscv::CSR_ICACHE:           csr_rdata = icache_q;
@@ -716,6 +769,10 @@ module csr_regfile import ariane_pkg::*; #(
             mtinst_d            = mtinst_q;
             mtval2_d            = mtval2_q;
         end
+        cur_clrs_d              = cur_clrs_q;
+        tlb_lock_pte_d          = tlb_lock_pte_q;
+        tlb_lock_vpn_d          = tlb_lock_vpn_q;
+        tlb_lock_id_d           = tlb_lock_id_q;
         dcache_d                = dcache_q;
         icache_d                = icache_q;
         fence_t_pad_d           = fence_t_pad_q;
@@ -1319,6 +1376,31 @@ module csr_regfile import ariane_pkg::*; #(
                 riscv::CSR_MHPM_COUNTER_30H,
                 riscv::CSR_MHPM_COUNTER_31H :  begin perf_we_o = 1'b1; if (riscv::XLEN == 32) perf_data_o = csr_wdata;else update_access_exception = 1'b1;end
 
+                riscv::CSR_CUR_CLRS:           cur_clrs_d  = csr_wdata & {{riscv::XLEN-ariane_pkg::NUM_COLOURS{1'b0}}, {ariane_pkg::NUM_COLOURS{1'b1}}};
+                riscv::CSR_TLB_LOCK_PTE_1:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 1 && !v_q) tlb_lock_pte_d[0] = riscv::pte_t'(csr_wdata); else update_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_VPN_1:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 1 && !v_q) tlb_lock_vpn_d[0] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_ID_1:      if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 1 && !v_q) tlb_lock_id_d[0] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_PTE_2:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 2 && !v_q) tlb_lock_pte_d[1] = riscv::pte_t'(csr_wdata); else update_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_VPN_2:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 2 && !v_q) tlb_lock_vpn_d[1] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_ID_2:      if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 2 && !v_q) tlb_lock_id_d[1] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_PTE_3:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 3 && !v_q) tlb_lock_pte_d[2] = riscv::pte_t'(csr_wdata); else update_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_VPN_3:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 3 && !v_q) tlb_lock_vpn_d[2] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_ID_3:      if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 3 && !v_q) tlb_lock_id_d[2] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_PTE_4:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 4 && !v_q) tlb_lock_pte_d[3] = riscv::pte_t'(csr_wdata); else update_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_VPN_4:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 4 && !v_q) tlb_lock_vpn_d[3] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_ID_4:      if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 4 && !v_q) tlb_lock_id_d[3] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_PTE_5:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 5 && !v_q) tlb_lock_pte_d[4] = riscv::pte_t'(csr_wdata); else update_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_VPN_5:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 5 && !v_q) tlb_lock_vpn_d[4] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_ID_5:      if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 5 && !v_q) tlb_lock_id_d[4] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_PTE_6:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 6 && !v_q) tlb_lock_pte_d[5] = riscv::pte_t'(csr_wdata); else update_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_VPN_6:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 6 && !v_q) tlb_lock_vpn_d[5] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_ID_6:      if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 6 && !v_q) tlb_lock_id_d[5] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_PTE_7:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 7 && !v_q) tlb_lock_pte_d[6] = riscv::pte_t'(csr_wdata); else update_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_VPN_7:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 7 && !v_q) tlb_lock_vpn_d[6] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_ID_7:      if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 7 && !v_q) tlb_lock_id_d[6] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_PTE_8:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 8 && !v_q) tlb_lock_pte_d[7] = riscv::pte_t'(csr_wdata); else update_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_VPN_8:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 8 && !v_q) tlb_lock_vpn_d[7] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
+                riscv::CSR_TLB_LOCK_ID_8:      if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 8 && !v_q) tlb_lock_id_d[7] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
                 riscv::CSR_DCACHE:             dcache_d    = {{riscv::XLEN-1{1'b0}}, csr_wdata[0]}; // enable bit
                 riscv::CSR_ICACHE:             icache_d    = {{riscv::XLEN-1{1'b0}}, csr_wdata[0]}; // enable bit
                 riscv::CSR_FENCE_T_PAD:        fence_t_pad_d = {{riscv::XLEN-32{1'b0}}, csr_wdata[31:0]};
@@ -2104,6 +2186,10 @@ module csr_regfile import ariane_pkg::*; #(
             mtinst_q               <= {riscv::XLEN{1'b0}};
             menvcfg_q              <= '0;
             senvcfg_q              <= '0;
+            cur_clrs_q             <= {{riscv::XLEN-ariane_pkg::NUM_COLOURS{1'b0}}, {ariane_pkg::NUM_COLOURS{1'b1}}};
+            tlb_lock_pte_q         <= '0;
+            tlb_lock_vpn_q         <= '0;
+            tlb_lock_id_q          <= '0;
             dcache_q               <= {{riscv::XLEN-1{1'b0}}, 1'b1};
             icache_q               <= {{riscv::XLEN-1{1'b0}}, 1'b1};
             fence_t_pad_q          <= {riscv::XLEN{1'b0}};
@@ -2177,6 +2263,10 @@ module csr_regfile import ariane_pkg::*; #(
             mtinst_q               <= mtinst_d;
             menvcfg_q              <= menvcfg_d;
             senvcfg_q              <= senvcfg_d;
+            cur_clrs_q             <= cur_clrs_d;
+            tlb_lock_pte_q         <= tlb_lock_pte_d;
+            tlb_lock_vpn_q         <= tlb_lock_vpn_d;
+            tlb_lock_id_q          <= tlb_lock_id_d;
             dcache_q               <= dcache_d;
             icache_q               <= icache_d;
             fence_t_pad_q          <= fence_t_pad_d;

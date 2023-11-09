@@ -596,6 +596,32 @@ package riscv;
         CSR_MHPM_COUNTER_29H = 12'hB9D,  // reserved
         CSR_MHPM_COUNTER_30H = 12'hB9E,  // reserved
         CSR_MHPM_COUNTER_31H = 12'hB9F,  // reserved
+        // Resource Partitioning - Supervisor level
+        CSR_CUR_CLRS       = 12'h5C0,
+        CSR_TLB_LOCK_PTE_1 = 12'h5C1,
+        CSR_TLB_LOCK_VPN_1 = 12'h5C2,
+        CSR_TLB_LOCK_ID_1  = 12'h5C3,
+        CSR_TLB_LOCK_PTE_2 = 12'h5C4,
+        CSR_TLB_LOCK_VPN_2 = 12'h5C5,
+        CSR_TLB_LOCK_ID_2  = 12'h5C6,
+        CSR_TLB_LOCK_PTE_3 = 12'h5C7,
+        CSR_TLB_LOCK_VPN_3 = 12'h5C8,
+        CSR_TLB_LOCK_ID_3  = 12'h5C9,
+        CSR_TLB_LOCK_PTE_4 = 12'h5CA,
+        CSR_TLB_LOCK_VPN_4 = 12'h5CB,
+        CSR_TLB_LOCK_ID_4  = 12'h5CC,
+        CSR_TLB_LOCK_PTE_5 = 12'h5CD,
+        CSR_TLB_LOCK_VPN_5 = 12'h5CE,
+        CSR_TLB_LOCK_ID_5  = 12'h5CF,
+        CSR_TLB_LOCK_PTE_6 = 12'h5D0,
+        CSR_TLB_LOCK_VPN_6 = 12'h5D1,
+        CSR_TLB_LOCK_ID_6  = 12'h5D2,
+        CSR_TLB_LOCK_PTE_7 = 12'h5D3,
+        CSR_TLB_LOCK_VPN_7 = 12'h5D4,
+        CSR_TLB_LOCK_ID_7  = 12'h5D5,
+        CSR_TLB_LOCK_PTE_8 = 12'h5D6,
+        CSR_TLB_LOCK_VPN_8 = 12'h5D7,
+        CSR_TLB_LOCK_ID_8  = 12'h5D8,
         // Cache Control (platform specifc)
         CSR_DCACHE         = 12'h701,
         CSR_ICACHE         = 12'h700,

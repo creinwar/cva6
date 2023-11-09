@@ -24,6 +24,9 @@ module ex_stage import ariane_pkg::*; #(
     input  logic                                   flush_i,
     input  logic                                   debug_mode_i,
 
+    input  logic [ariane_pkg::NUM_COLOURS-1:0]     cur_clrs_i,            // Current active colours
+    input  ariane_pkg::locked_tlb_entry_t[ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] locked_tlb_entries_i,  // Locked TLB entries
+
     input  logic [riscv::VLEN-1:0]                 rs1_forwarding_i,
     input  logic [riscv::VLEN-1:0]                 rs2_forwarding_i,
     input  fu_data_t                               fu_data_i,
@@ -315,6 +318,8 @@ module ex_stage import ariane_pkg::*; #(
         .clk_i,
         .rst_ni,
         .flush_i,
+        .cur_clrs_i,
+        .locked_tlb_entries_i,
         .no_st_pending_o,
         .fu_data_i             ( lsu_data ),
         .lsu_ready_o,

@@ -226,6 +226,9 @@ module cva6 import ariane_pkg::*; #(
   logic                     single_step_csr_commit;
   riscv::pmpcfg_t [15:0]    pmpcfg;
   logic [15:0][riscv::PLEN-3:0] pmpaddr;
+  logic [ariane_pkg::NUM_COLOURS-1:0] cur_clrs_csr_othr;
+  ariane_pkg::locked_tlb_entry_t[ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] locked_tlb_entries_csr_ex;
+
   // ----------------------------
   // Performance Counters <-> *
   // ----------------------------
@@ -474,6 +477,8 @@ module cva6 import ariane_pkg::*; #(
     .clk_i                  ( clk_i                       ),
     .rst_ni                 ( rst_uarch_n                 ),
     .debug_mode_i           ( debug_mode                  ),
+    .cur_clrs_i             ( cur_clrs_csr_othr           ),
+    .locked_tlb_entries_i   ( locked_tlb_entries_csr_ex   ),
     .flush_i                ( flush_ctrl_ex               ),
     .rs1_forwarding_i       ( rs1_forwarding_id_ex        ),
     .rs2_forwarding_i       ( rs2_forwarding_id_ex        ),
@@ -702,6 +707,8 @@ module cva6 import ariane_pkg::*; #(
     .hu_o                   ( hu                            ),
     .debug_mode_o           ( debug_mode                    ),
     .single_step_o          ( single_step_csr_commit        ),
+    .cur_clrs_o             ( cur_clrs_csr_othr             ),
+    .locked_tlb_entries_o   ( locked_tlb_entries_csr_ex     ),
     .dcache_en_o            ( dcache_en_csr_nbdcache        ),
     .icache_en_o            ( icache_en_csr                 ),
     .fence_t_pad_o          ( fence_t_pad_csr_ctrl          ),

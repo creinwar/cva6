@@ -21,6 +21,8 @@ module load_store_unit import ariane_pkg::*; #(
     input  logic                     clk_i,
     input  logic                     rst_ni,
     input  logic                     flush_i,
+    input  logic [ariane_pkg::NUM_COLOURS-1:0]  cur_clrs_i,
+    input  ariane_pkg::locked_tlb_entry_t[ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] locked_tlb_entries_i,  // Locked TLB entries
     output logic                     no_st_pending_o,
     input  logic                     amo_valid_commit_i,
     input  riscv::xlen_t             tinst_i,
@@ -204,6 +206,8 @@ module load_store_unit import ariane_pkg::*; #(
             // Hypervisor load/store signals
             .hlvx_inst_i            ( mmu_hlvx_inst          ),
             .hs_ld_st_inst_i        ( mmu_hs_ld_st_inst      ),
+            .cur_clrs_i,
+            .locked_tlb_entries_i,
             .*
         );
     end else if (MMU_PRESENT && (riscv::XLEN == 64)) begin : gen_mmu_sv39

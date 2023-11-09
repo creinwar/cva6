@@ -64,6 +64,8 @@ module cva6_mmu_sv39x4 import ariane_pkg::*; #(
     input logic                             vmxr_i,
     input logic                             hlvx_inst_i,
     input logic                             hs_ld_st_inst_i,
+    input logic [ariane_pkg::NUM_COLOURS-1:0] cur_clrs_i,
+    input  ariane_pkg::locked_tlb_entry_t[ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] locked_tlb_entries_i,  // Locked TLB entries
     // input logic flag_mprv_i,
     input logic [riscv::PPNW-1:0]           satp_ppn_i,
     input logic [riscv::PPNW-1:0]           vsatp_ppn_i,
@@ -124,6 +126,8 @@ module cva6_mmu_sv39x4 import ariane_pkg::*; #(
     logic        dtlb_lu_hit;
     logic [riscv::GPLEN-1:0] dtlb_gpaddr;
 
+    ariane_pkg::locked_tlb_entry_t[ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] locked_dtlb_entries, locked_itlb_entries;
+
 
     // Assignments
     assign itlb_lu_access = icache_areq_i.fetch_req;
@@ -131,6 +135,20 @@ module cva6_mmu_sv39x4 import ariane_pkg::*; #(
     assign itlb_lu_asid = v_i ? vs_asid_i : asid_i;
     assign dtlb_lu_asid = (ld_st_v_i || flush_tlb_vvma_i) ? vs_asid_i : asid_i;
 
+    // Split the incoming locked tlb entries in data/instruction lockings
+    always_comb begin
+        // Filter out instruction entries for the DTLB...
+        for(int unsigned i = 0; i < ariane_pkg::NUM_TLB_LOCK_WAYS; i++) begin
+            locked_dtlb_entries[i] = locked_tlb_entries_i[i];
+            locked_dtlb_entries[i].valid = locked_tlb_entries_i[i].valid & locked_tlb_entries_i[i].data;
+        end
+
+        // ...and data entries for the ITLB
+        for(int unsigned i = 0; i < ariane_pkg::NUM_TLB_LOCK_WAYS; i++) begin
+            locked_itlb_entries[i] = locked_tlb_entries_i[i];
+            locked_itlb_entries[i].valid = locked_tlb_entries_i[i].valid & locked_tlb_entries_i[i].instr;
+        end
+    end
 
     cva6_tlb_sv39x4 #(
         .TLB_ENTRIES      ( INSTR_TLB_ENTRIES          ),
@@ -139,6 +157,8 @@ module cva6_mmu_sv39x4 import ariane_pkg::*; #(
     ) i_itlb (
         .clk_i            ( clk_i                      ),
         .rst_ni           ( rst_ni                     ),
+        .cur_clrs_i,
+        .locked_tlb_entries_i ( locked_itlb_entries    ),
         .flush_i          ( flush_tlb_i                ),
         .flush_vvma_i     ( flush_tlb_vvma_i           ),
         .flush_gvma_i     ( flush_tlb_gvma_i           ),
@@ -172,6 +192,8 @@ module cva6_mmu_sv39x4 import ariane_pkg::*; #(
     ) i_dtlb (
         .clk_i            ( clk_i                       ),
         .rst_ni           ( rst_ni                      ),
+        .cur_clrs_i,
+        .locked_tlb_entries_i ( locked_dtlb_entries     ),
         .flush_i          ( flush_tlb_i                 ),
         .flush_vvma_i     ( flush_tlb_vvma_i            ),
         .flush_gvma_i     ( flush_tlb_gvma_i            ),
