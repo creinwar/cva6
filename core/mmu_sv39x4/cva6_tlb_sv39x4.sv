@@ -24,6 +24,8 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
   )(
     input  logic                    clk_i,    // Clock
     input  logic                    rst_ni,   // Asynchronous reset active low
+    input  logic [ariane_pkg::NUM_COLOURS-1:0] cur_clrs_i,  // Currently active colours
+    input  ariane_pkg::locked_tlb_entry_t[ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] locked_tlb_entries_i,  // Locked TLB entries
     input  logic                    flush_i,  // Flush normal translations signal
     input  logic                    flush_vvma_i,  // Flush vs stage signal
     input  logic                    flush_gvma_i,  // Flush g stage signal
@@ -63,6 +65,7 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
       logic                  s_st_enbl;   // s-stage translation
       logic                  g_st_enbl;   // g-stage translation
       logic                  v;           // virtualization mode
+      logic                  locked;      // Is this a locked entry?
       logic                  valid;
     } [TLB_ENTRIES-1:0] tags_q, tags_n;
 
@@ -70,6 +73,13 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
       riscv::pte_t pte;
       riscv::pte_t gpte;
     } [TLB_ENTRIES-1:0] content_q, content_n;
+
+    typedef enum logic[1:0] {
+        DISABLED    = 2'b00,
+        LEFT        = 2'b01,
+        RIGHT       = 2'b10,
+        BOTH        = 2'b11
+    } plru_node_state_t;
 
     logic [8:0] vpn0, vpn1;
     logic [riscv::GPPN2:0] vpn2;
@@ -81,6 +91,23 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
     logic [TLB_ENTRIES-1:0] is_2M;
     logic [TLB_ENTRIES-1:0] match_stage;
     riscv::pte_t   g_content;
+
+    logic [TLB_ENTRIES-1:0] replacement_allowed;
+
+    localparam clr_tlb_ratio = TLB_ENTRIES/ariane_pkg::NUM_COLOURS;
+
+    // Figure out the currently writable TLB ways
+    // I.e. the set of non-locked TLB ways which are allowed by our colour set
+    always_comb begin
+        for(int unsigned i = 0; i < TLB_ENTRIES; i++) begin
+            if(i < ariane_pkg::NUM_TLB_LOCK_WAYS) begin
+                replacement_allowed[i] = cur_clrs_i[i/clr_tlb_ratio] & ~locked_tlb_entries_i[i].valid;
+            end else begin
+                replacement_allowed[i] = cur_clrs_i[i/clr_tlb_ratio];
+            end
+        end
+    end
+
     //-------------
     // Translation
     //-------------
@@ -177,7 +204,7 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
     assign vmid_to_be_flushed_is0 =  ~(|vmid_to_be_flushed_i);
     assign gpaddr_to_be_flushed_is0 = ~(|gpaddr_to_be_flushed_i);
 
-	  // ------------------
+	// ------------------
     // Update and Flush
     // ------------------
     always_comb begin : update_flush
@@ -195,75 +222,110 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
             gpaddr_gppn1_match[i] = (gpaddr_to_be_flushed_i[29:21] == gppn[i][17:9]);
             gpaddr_gppn2_match[i] = (gpaddr_to_be_flushed_i[30+riscv::GPPN2:30] == gppn[i][18+riscv::GPPN2:18]);
 
-            if (flush_i) begin
-                if(!tags_q[i].v) begin
-                    // invalidate logic
-                    // flush everything if ASID is 0 and vaddr is 0 ("SFENCE.VMA x0 x0" case)
-        			if (asid_to_be_flushed_is0 && vaddr_to_be_flushed_is0 )
-                        tags_n[i].valid = 1'b0;
-                    // flush vaddr in all addressing space ("SFENCE.VMA vaddr x0" case), it should happen only for leaf pages
-                    else if (asid_to_be_flushed_is0 && ((vaddr_vpn0_match[i] && vaddr_vpn1_match[i] && vaddr_vpn2_match[i]) || (vaddr_vpn2_match[i] && tags_q[i].is_s_1G) || (vaddr_vpn1_match[i] && vaddr_vpn2_match[i] && tags_q[i].is_s_2M) ) && (~vaddr_to_be_flushed_is0))
-                        tags_n[i].valid = 1'b0;
-                    // the entry is flushed if it's not global and asid and vaddr both matches with the entry to be flushed ("SFENCE.VMA vaddr asid" case)
-				    else if ((!content_q[i].pte.g) && ((vaddr_vpn0_match[i] && vaddr_vpn1_match[i] && vaddr_vpn2_match[i]) || (vaddr_vpn2_match[i] && tags_q[i].is_s_1G) || (vaddr_vpn1_match[i] && vaddr_vpn2_match[i] && tags_q[i].is_s_2M)) && (asid_to_be_flushed_i == tags_q[i].asid) && (!vaddr_to_be_flushed_is0) && (!asid_to_be_flushed_is0))
-				        tags_n[i].valid = 1'b0;
-                    // the entry is flushed if it's not global, and the asid matches and vaddr is 0. ("SFENCE.VMA 0 asid" case)
-				    else if ((!content_q[i].pte.g) && (vaddr_to_be_flushed_is0) && (asid_to_be_flushed_i == tags_q[i].asid) && (!asid_to_be_flushed_is0))
-				        tags_n[i].valid = 1'b0;
-                end
-            end else if (flush_vvma_i) begin
-                if(tags_q[i].v && tags_q[i].s_st_enbl) begin
-                    // invalidate logic
-                    // flush everything if current VMID matches and ASID is 0 and vaddr is 0 ("SFENCE.VMA/HFENCE.VVMA x0 x0" case)
-        			if (asid_to_be_flushed_is0 && vaddr_to_be_flushed_is0 && ((tags_q[i].g_st_enbl && lu_vmid_i == tags_q[i].vmid) || !tags_q[i].g_st_enbl))
-                        tags_n[i].valid = 1'b0;
-                    // flush vaddr in all addressing space if current VMID matches ("SFENCE.VMA/HFENCE.VVMA vaddr x0" case), it should happen only for leaf pages
-                    else if (asid_to_be_flushed_is0 && ((vaddr_vpn0_match[i] && vaddr_vpn1_match[i] && vaddr_vpn2_match[i]) || (vaddr_vpn2_match[i] && tags_q[i].is_s_1G) || (vaddr_vpn1_match[i] && vaddr_vpn2_match[i] && tags_q[i].is_s_2M) ) && (~vaddr_to_be_flushed_is0) && ((tags_q[i].g_st_enbl && lu_vmid_i == tags_q[i].vmid) || !tags_q[i].g_st_enbl))
-                        tags_n[i].valid = 1'b0;
-                    // the entry is flushed if it's not global and asid and vaddr and current VMID matches with the entry to be flushed ("SFENCE.VMA/HFENCE.VVMA vaddr asid" case)
-				    else if ((!content_q[i].pte.g) && ((vaddr_vpn0_match[i] && vaddr_vpn1_match[i] && vaddr_vpn2_match[i]) || (vaddr_vpn2_match[i] && tags_q[i].is_s_1G) || (vaddr_vpn1_match[i] && vaddr_vpn2_match[i] && tags_q[i].is_s_2M)) && (asid_to_be_flushed_i == tags_q[i].asid && ((tags_q[i].g_st_enbl && lu_vmid_i == tags_q[i].vmid) || !tags_q[i].g_st_enbl)) && (!vaddr_to_be_flushed_is0) && (!asid_to_be_flushed_is0))
-				        tags_n[i].valid = 1'b0;
-                    // the entry is flushed if it's not global, and the asid and the current VMID matches and vaddr is 0. ("SFENCE.VMA/HFENCE.VVMA 0 asid" case)
-				    else if ((!content_q[i].pte.g) && (vaddr_to_be_flushed_is0) && (asid_to_be_flushed_i == tags_q[i].asid && ((tags_q[i].g_st_enbl && lu_vmid_i == tags_q[i].vmid) || !tags_q[i].g_st_enbl)) && (!asid_to_be_flushed_is0))
-				        tags_n[i].valid = 1'b0;
-                end
-            end else if (flush_gvma_i) begin
-                if(tags_q[i].g_st_enbl) begin
-                    // invalidate logic
-                    // flush everything if vmid is 0 and addr is 0 ("HFENCE.GVMA x0 x0" case)
-        			if (vmid_to_be_flushed_is0 && gpaddr_to_be_flushed_is0 )
-                        tags_n[i].valid = 1'b0;
-                    // flush gpaddr in all addressing space ("HFENCE.GVMA gpaddr x0" case), it should happen only for leaf pages
-                    else if (vmid_to_be_flushed_is0 && ((gpaddr_gppn0_match[i] && gpaddr_gppn1_match[i] && gpaddr_gppn2_match[i]) || (gpaddr_gppn2_match[i] && tags_q[i].is_g_1G) || (gpaddr_gppn1_match[i] && gpaddr_gppn2_match[i] && tags_q[i].is_g_2M) ) && (~gpaddr_to_be_flushed_is0))
-                        tags_n[i].valid = 1'b0;
-                    // the entry vmid and gpaddr both matches with the entry to be flushed ("HFENCE.GVMA gpaddr vmid" case)
-				    else if (((gpaddr_gppn0_match[i] && gpaddr_gppn1_match[i] && gpaddr_gppn2_match[i]) || (gpaddr_gppn2_match[i] && tags_q[i].is_g_1G) || (gpaddr_gppn1_match[i] && gpaddr_gppn2_match[i] && tags_q[i].is_g_2M)) && (vmid_to_be_flushed_i == tags_q[i].vmid) && (~gpaddr_to_be_flushed_is0) && (~vmid_to_be_flushed_is0))
-				        tags_n[i].valid = 1'b0;
-                    // the entry is flushed if the vmid matches and gpaddr is 0. ("HFENCE.GVMA 0 vmid" case)
-				    else if ((gpaddr_to_be_flushed_is0) && (vmid_to_be_flushed_i == tags_q[i].vmid) && (!vmid_to_be_flushed_is0))
-				        tags_n[i].valid = 1'b0;
-                end
-            // normal replacement
-            end else if (update_i.valid & replace_en[i]) begin
+            // Locked TLB entry
+            // they take precedence over everything and are never flushed until
+            // they are marked as no longer valid
+            if (i < ariane_pkg::NUM_TLB_LOCK_WAYS && locked_tlb_entries_i[i].valid) begin
                 // update tag array
                 tags_n[i] = '{
-                    asid:  update_i.asid,
-                    vmid:  update_i.vmid,
-                    vpn2:  update_i.vpn[18+riscv::GPPN2:18],
-                    vpn1:  update_i.vpn [17:9],
-                    vpn0:  update_i.vpn [8:0],
-                    s_st_enbl:  s_st_enbl_i,
-                    g_st_enbl:  g_st_enbl_i,
-                    v:  v_i,
-                    is_s_1G: update_i.is_s_1G,
-                    is_s_2M: update_i.is_s_2M,
-                    is_g_1G: update_i.is_g_1G,
-                    is_g_2M: update_i.is_g_2M,
-                    valid: 1'b1
+                    asid:       locked_tlb_entries_i[i].asid,
+                    vmid:       locked_tlb_entries_i[i].vmid,
+                    vpn2:       locked_tlb_entries_i[i].vpn[18+riscv::GPPN2:18],
+                    vpn1:       locked_tlb_entries_i[i].vpn [17:9],
+                    vpn0:       locked_tlb_entries_i[i].vpn [8:0],
+                    s_st_enbl:  locked_tlb_entries_i[i].s_st_enbl,
+                    g_st_enbl:  locked_tlb_entries_i[i].g_st_enbl,
+                    v:          locked_tlb_entries_i[i].virt_mode,
+                    is_s_1G:    locked_tlb_entries_i[i].size == GIGA_PAGE,
+                    is_s_2M:    locked_tlb_entries_i[i].size == MEGA_PAGE,
+                    is_g_1G:    locked_tlb_entries_i[i].size == GIGA_PAGE,
+                    is_g_2M:    locked_tlb_entries_i[i].size == MEGA_PAGE,
+                    locked:     1'b1,
+                    valid:      1'b1
                 };
                 // and content as well
-                content_n[i].pte = update_i.content;
-                content_n[i].gpte = update_i.g_content;
+                content_n[i].pte    = locked_tlb_entries_i[i].leaf_pte;
+
+                // Patch the locked PTE for the G stage to always have
+                // the u bit set
+                content_n[i].gpte   = locked_tlb_entries_i[i].leaf_pte;
+                content_n[i].gpte.u = 1'b1;
+            end else begin
+                if (flush_i) begin
+                    if(!tags_q[i].v) begin
+                        // invalidate logic
+                        // flush everything if ASID is 0 and vaddr is 0 ("SFENCE.VMA x0 x0" case)
+                        if (asid_to_be_flushed_is0 && vaddr_to_be_flushed_is0 )
+                            tags_n[i].valid = 1'b0;
+                        // flush vaddr in all addressing space ("SFENCE.VMA vaddr x0" case), it should happen only for leaf pages
+                        else if (asid_to_be_flushed_is0 && ((vaddr_vpn0_match[i] && vaddr_vpn1_match[i] && vaddr_vpn2_match[i]) || (vaddr_vpn2_match[i] && tags_q[i].is_s_1G) || (vaddr_vpn1_match[i] && vaddr_vpn2_match[i] && tags_q[i].is_s_2M) ) && (~vaddr_to_be_flushed_is0))
+                            tags_n[i].valid = 1'b0;
+                        // the entry is flushed if it's not global and asid and vaddr both matches with the entry to be flushed ("SFENCE.VMA vaddr asid" case)
+			            else if ((!content_q[i].pte.g) && ((vaddr_vpn0_match[i] && vaddr_vpn1_match[i] && vaddr_vpn2_match[i]) || (vaddr_vpn2_match[i] && tags_q[i].is_s_1G) || (vaddr_vpn1_match[i] && vaddr_vpn2_match[i] && tags_q[i].is_s_2M)) && (asid_to_be_flushed_i == tags_q[i].asid) && (!vaddr_to_be_flushed_is0) && (!asid_to_be_flushed_is0))
+			                tags_n[i].valid = 1'b0;
+                        // the entry is flushed if it's not global, and the asid matches and vaddr is 0. ("SFENCE.VMA 0 asid" case)
+			            else if ((!content_q[i].pte.g) && (vaddr_to_be_flushed_is0) && (asid_to_be_flushed_i == tags_q[i].asid) && (!asid_to_be_flushed_is0))
+			                tags_n[i].valid = 1'b0;
+                    end
+                end else if (flush_vvma_i) begin
+                    if(tags_q[i].v && tags_q[i].s_st_enbl) begin
+                        // invalidate logic
+                        // flush everything if current VMID matches and ASID is 0 and vaddr is 0 ("SFENCE.VMA/HFENCE.VVMA x0 x0" case)
+                        if (asid_to_be_flushed_is0 && vaddr_to_be_flushed_is0 && ((tags_q[i].g_st_enbl && lu_vmid_i == tags_q[i].vmid) || !tags_q[i].g_st_enbl))
+                            tags_n[i].valid = 1'b0;
+                        // flush vaddr in all addressing space if current VMID matches ("SFENCE.VMA/HFENCE.VVMA vaddr x0" case), it should happen only for leaf pages
+                        else if (asid_to_be_flushed_is0 && ((vaddr_vpn0_match[i] && vaddr_vpn1_match[i] && vaddr_vpn2_match[i]) || (vaddr_vpn2_match[i] && tags_q[i].is_s_1G) || (vaddr_vpn1_match[i] && vaddr_vpn2_match[i] && tags_q[i].is_s_2M) ) && (~vaddr_to_be_flushed_is0) && ((tags_q[i].g_st_enbl && lu_vmid_i == tags_q[i].vmid) || !tags_q[i].g_st_enbl))
+                            tags_n[i].valid = 1'b0;
+                        // the entry is flushed if it's not global and asid and vaddr and current VMID matches with the entry to be flushed ("SFENCE.VMA/HFENCE.VVMA vaddr asid" case)
+                        else if ((!content_q[i].pte.g) && ((vaddr_vpn0_match[i] && vaddr_vpn1_match[i] && vaddr_vpn2_match[i]) || (vaddr_vpn2_match[i] && tags_q[i].is_s_1G) || (vaddr_vpn1_match[i] && vaddr_vpn2_match[i] && tags_q[i].is_s_2M)) && (asid_to_be_flushed_i == tags_q[i].asid && ((tags_q[i].g_st_enbl && lu_vmid_i == tags_q[i].vmid) || !tags_q[i].g_st_enbl)) && (!vaddr_to_be_flushed_is0) && (!asid_to_be_flushed_is0))
+                            tags_n[i].valid = 1'b0;
+                        // the entry is flushed if it's not global, and the asid and the current VMID matches and vaddr is 0. ("SFENCE.VMA/HFENCE.VVMA 0 asid" case)
+                        else if ((!content_q[i].pte.g) && (vaddr_to_be_flushed_is0) && (asid_to_be_flushed_i == tags_q[i].asid && ((tags_q[i].g_st_enbl && lu_vmid_i == tags_q[i].vmid) || !tags_q[i].g_st_enbl)) && (!asid_to_be_flushed_is0))
+                            tags_n[i].valid = 1'b0;
+                    end
+                end else if (flush_gvma_i) begin
+                    if(tags_q[i].g_st_enbl) begin
+                        // invalidate logic
+                        // flush everything if vmid is 0 and addr is 0 ("HFENCE.GVMA x0 x0" case)
+                        if (vmid_to_be_flushed_is0 && gpaddr_to_be_flushed_is0 )
+                            tags_n[i].valid = 1'b0;
+                        // flush gpaddr in all addressing space ("HFENCE.GVMA gpaddr x0" case), it should happen only for leaf pages
+                        else if (vmid_to_be_flushed_is0 && ((gpaddr_gppn0_match[i] && gpaddr_gppn1_match[i] && gpaddr_gppn2_match[i]) || (gpaddr_gppn2_match[i] && tags_q[i].is_g_1G) || (gpaddr_gppn1_match[i] && gpaddr_gppn2_match[i] && tags_q[i].is_g_2M) ) && (~gpaddr_to_be_flushed_is0))
+                            tags_n[i].valid = 1'b0;
+                        // the entry vmid and gpaddr both matches with the entry to be flushed ("HFENCE.GVMA gpaddr vmid" case)
+                        else if (((gpaddr_gppn0_match[i] && gpaddr_gppn1_match[i] && gpaddr_gppn2_match[i]) || (gpaddr_gppn2_match[i] && tags_q[i].is_g_1G) || (gpaddr_gppn1_match[i] && gpaddr_gppn2_match[i] && tags_q[i].is_g_2M)) && (vmid_to_be_flushed_i == tags_q[i].vmid) && (~gpaddr_to_be_flushed_is0) && (~vmid_to_be_flushed_is0))
+                            tags_n[i].valid = 1'b0;
+                        // the entry is flushed if the vmid matches and gpaddr is 0. ("HFENCE.GVMA 0 vmid" case)
+                        else if ((gpaddr_to_be_flushed_is0) && (vmid_to_be_flushed_i == tags_q[i].vmid) && (!vmid_to_be_flushed_is0))
+                            tags_n[i].valid = 1'b0;
+                    end
+                // normal replacement
+                end else if (update_i.valid & replace_en[i]) begin
+                    // update tag array
+                    tags_n[i] = '{
+                        asid:  update_i.asid,
+                        vmid:  update_i.vmid,
+                        vpn2:  update_i.vpn[18+riscv::GPPN2:18],
+                        vpn1:  update_i.vpn [17:9],
+                        vpn0:  update_i.vpn [8:0],
+                        s_st_enbl:  s_st_enbl_i,
+                        g_st_enbl:  g_st_enbl_i,
+                        v:  v_i,
+                        is_s_1G: update_i.is_s_1G,
+                        is_s_2M: update_i.is_s_2M,
+                        is_g_1G: update_i.is_g_1G,
+                        is_g_2M: update_i.is_g_2M,
+                        locked: 1'b0,
+                        valid: 1'b1
+                    };
+                    // and content as well
+                    content_n[i].pte = update_i.content;
+                    content_n[i].gpte = update_i.g_content;
+                // previously locked entry
+                end else if (tags_q[i].locked) begin
+                    tags_n[i].locked = 1'b0;
+                    tags_n[i].valid = 1'b0;
+                end
             end
         end
     end
@@ -272,8 +334,50 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
     // PLRU - Pseudo Least Recently Used Replacement
     // -----------------------------------------------
     logic[2*(TLB_ENTRIES-1)-1:0] plru_tree_q, plru_tree_n;
+    plru_node_state_t [(TLB_ENTRIES-1)-1:0] plru_node_state_q, plru_node_state_d;
     always_comb begin : plru_replacement
+
+        // This configures the allowed directions per non-leaf node of the tree depending on the
+        // incoming colouring information
+        for(int unsigned n = 0; n < (TLB_ENTRIES-1); n++) begin
+
+            // The LSB contains the root of the tree, so whether or not a given tree branch is
+            // allowed to be used depends on the tree nodes one level further down towards the
+            // leaves (i.e. (2*n + 1) places ahead)
+            if(n < ((TLB_ENTRIES/2)-1)) begin
+                plru_node_state_d[n] = plru_node_state_t'({|plru_node_state_d[2*n+2], |plru_node_state_d[2*n+1]});
+
+            // The topmost (TLB_ENTRIES/2) places are only related to the allowed colours and
+            // any current lockings (i.e. a TLB way is eligible for replacement iff we own
+            // that colour and this way is not currently locked)
+            end else begin
+                // This gives the offset into the merged colour/locking input
+                automatic int unsigned bit_idx = n - ((TLB_ENTRIES/2) - 1);
+                // The next state is determined by two adjacent TLB ways
+                // (i.e. LEFT, RIGHT, BOTH, DISABLED)
+                automatic logic [1:0] n_st = (replacement_allowed >> 2*bit_idx);
+                plru_node_state_d[n] = plru_node_state_t'(n_st);
+            end
+        end
+
+        // By default keep the current tree
         plru_tree_n = plru_tree_q;
+
+        // But if the colour config was changed, re-init the tree
+        // This makes sure the tree is in a known good state when switching
+        // colours or lockings
+        if (plru_node_state_d != plru_node_state_q) begin
+            for(int unsigned n = 0; n < (TLB_ENTRIES-1); n++) begin
+                // By default everything is initialized to "left"
+                // except right only nodes of course
+                if(plru_node_state_d[n] == RIGHT) begin
+                    plru_tree_n[n] = 1'b1;
+                end else begin
+                    plru_tree_n[n] = 1'b0;
+                end
+            end
+        end
+
         // The PLRU-tree indexing:
         // lvl0        0
         //            / \
@@ -308,7 +412,15 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
                   shift = $clog2(TLB_ENTRIES) - lvl;
                   // to circumvent the 32 bit integer arithmetic assignment
                   new_index =  ~((i >> (shift-1)) & 32'b1);
-                  plru_tree_n[idx_base + (i >> shift)] = new_index[0];
+
+                  // If the colouring allows it, we flip the current state
+                  if (plru_node_state_q[idx_base + (i >> shift)] == BOTH) begin
+                    plru_tree_n[idx_base + (i >> shift)] = new_index[0];
+                  end else if (plru_node_state_q[idx_base + (i >> shift)] == DISABLED) begin
+                    plru_tree_n[idx_base + (i >> shift)] = 1'b0;
+                  end else begin
+                    plru_tree_n[idx_base + (i >> shift)] = (plru_node_state_q[idx_base + (i >> shift)] == LEFT) ? 1'b0 : 1'b1;
+                  end
                 end
             end
         end
@@ -335,12 +447,21 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
                 // lvl0 <=> MSB, lvl1 <=> MSB-1, ...
                 shift = $clog2(TLB_ENTRIES) - lvl;
 
-                // en &= plru_tree_q[idx_base + (i>>shift)] == ((i >> (shift-1)) & 1'b1);
                 new_index =  (i >> (shift-1)) & 32'b1;
+
+                // We have to treat left and right a bit differently
+                // This is the right case
                 if (new_index[0]) begin
-                  en &= plru_tree_q[idx_base + (i>>shift)];
+                  en &=  plru_tree_q[idx_base + (i>>shift)] &
+                        (plru_node_state_q[idx_base + (i>>shift)] == BOTH ||
+                         plru_node_state_q[idx_base + (i>>shift)] == RIGHT);
+
+                // And this is the left case
                 end else begin
-                  en &= ~plru_tree_q[idx_base + (i>>shift)];
+                  en &= ~plru_tree_q[idx_base + (i>>shift)] &
+                        (plru_node_state_q[idx_base + (i>>shift)] == BOTH ||
+                         plru_node_state_q[idx_base + (i>>shift)] == LEFT);
+
                 end
             end
             replace_en[i] = en;
@@ -353,10 +474,12 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
             tags_q      <= '{default: 0};
             content_q   <= '{default: 0};
             plru_tree_q <= '{default: 0};
+            plru_node_state_q <= {(TLB_ENTRIES-1){BOTH}};
         end else begin
             tags_q      <= tags_n;
             content_q   <= content_n;
             plru_tree_q <= plru_tree_n;
+            plru_node_state_q <= plru_node_state_d;
         end
     end
     //--------------
@@ -371,6 +494,9 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
         else begin $error("TLB size must be a multiple of 2 and greater than 1"); $stop(); end
       assert (ASID_WIDTH >= 1)
         else begin $error("ASID width must be at least 1"); $stop(); end
+      assert ((ariane_pkg::NUM_COLOURS <= TLB_ENTRIES) && (clr_tlb_ratio == 1 || (clr_tlb_ratio & (clr_tlb_ratio - 1)) == 0))
+        else begin $error("The number of colours must be less than or equal to\
+the number of TLB entries and their ratio must be a power of two"); $stop(); end
     end
 
     // Just for checking

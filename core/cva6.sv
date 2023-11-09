@@ -220,6 +220,8 @@ module cva6 import ariane_pkg::*; #(
   logic [7:0]               sintthresh_csr;
   logic [7:0]               vsintthresh_csr;
   logic                     dcache_en_csr_nbdcache;
+  logic [ariane_pkg::DCACHE_SET_ASSOC-1:0]  dcache_spm_ways_csr_cache;
+  logic [ariane_pkg::ICACHE_SET_ASSOC-1:0]  icache_spm_ways_csr_cache;
   logic                     csr_write_fflags_commit_cs;
   logic                     icache_en_csr;
   logic [31:0]              fence_t_pad_csr_ctrl;
@@ -229,6 +231,9 @@ module cva6 import ariane_pkg::*; #(
   logic                     single_step_csr_commit;
   riscv::pmpcfg_t [15:0]    pmpcfg;
   logic [15:0][riscv::PLEN-3:0] pmpaddr;
+  logic [ariane_pkg::NUM_COLOURS-1:0] cur_clrs_csr_othr;
+  ariane_pkg::locked_tlb_entry_t[ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] locked_tlb_entries_csr_ex;
+
   // ----------------------------
   // Performance Counters <-> *
   // ----------------------------
@@ -481,6 +486,8 @@ module cva6 import ariane_pkg::*; #(
     .clk_i                  ( clk_i                       ),
     .rst_ni                 ( rst_uarch_n                 ),
     .debug_mode_i           ( debug_mode                  ),
+    .cur_clrs_i             ( cur_clrs_csr_othr           ),
+    .locked_tlb_entries_i   ( locked_tlb_entries_csr_ex   ),
     .flush_i                ( flush_ctrl_ex               ),
     .rs1_forwarding_i       ( rs1_forwarding_id_ex        ),
     .rs2_forwarding_i       ( rs2_forwarding_id_ex        ),
@@ -710,7 +717,11 @@ module cva6 import ariane_pkg::*; #(
     .hu_o                   ( hu                            ),
     .debug_mode_o           ( debug_mode                    ),
     .single_step_o          ( single_step_csr_commit        ),
+    .cur_clrs_o             ( cur_clrs_csr_othr             ),
+    .locked_tlb_entries_o   ( locked_tlb_entries_csr_ex     ),
     .dcache_en_o            ( dcache_en_csr_nbdcache        ),
+    .dcache_spm_ways_o      ( dcache_spm_ways_csr_cache     ),
+    .icache_spm_ways_o      ( icache_spm_ways_csr_cache     ),
     .icache_en_o            ( icache_en_csr                 ),
     .fence_t_pad_o          ( fence_t_pad_csr_ctrl          ),
     .fence_t_src_sel_o      ( fence_t_src_sel_csr_ctrl      ),
@@ -893,6 +904,7 @@ module cva6 import ariane_pkg::*; #(
     .icache_en_i           ( icache_en_csr               ),
     .icache_flush_i        ( icache_flush_ctrl_cache     ),
     .icache_miss_o         ( icache_miss_cache_perf      ),
+    .icache_spm_ways_i     ( icache_spm_ways_csr_cache   ),
     .icache_areq_i         ( icache_areq_ex_cache        ),
     .icache_areq_o         ( icache_areq_cache_ex        ),
     .icache_dreq_i         ( icache_dreq_if_cache        ),
@@ -901,6 +913,7 @@ module cva6 import ariane_pkg::*; #(
     .dcache_enable_i       ( dcache_en_csr_nbdcache      ),
     .dcache_flush_i        ( dcache_flush_ctrl_cache     ),
     .dcache_flush_ack_o    ( dcache_flush_ack_cache_ctrl ),
+    .dcache_spm_ways_i     ( dcache_spm_ways_csr_cache   ),
     // to commit stage
     .amo_req_i             ( amo_req                     ),
     .amo_resp_o            ( amo_resp                    ),

@@ -36,6 +36,7 @@ module std_cache_subsystem import ariane_pkg::*; import std_cache_pkg::*; #(
     input  logic                           icache_en_i,            // enable icache (or bypass e.g: in debug mode)
     input  logic                           icache_flush_i,         // flush the icache, flush and kill have to be asserted together
     output logic                           icache_miss_o,          // to performance counter
+    input  logic [ariane_pkg::ICACHE_SET_ASSOC-1:0] icache_spm_ways_i,
     // address translation requests
     input  icache_areq_i_t                 icache_areq_i,          // to/from frontend
     output icache_areq_o_t                 icache_areq_o,
@@ -49,6 +50,7 @@ module std_cache_subsystem import ariane_pkg::*; import std_cache_pkg::*; #(
     // Cache management
     input  logic                           dcache_enable_i,        // from CSR
     input  logic                           dcache_flush_i,         // high until acknowledged
+    input  [ariane_pkg::DCACHE_SET_ASSOC-1:0]   dcache_spm_ways_i,
     output logic                           dcache_flush_ack_o,     // send a single cycle acknowledge signal when the cache is flushed
     output logic                           dcache_miss_o,          // we missed on a ld/st
     output logic                           wbuffer_empty_o,        // statically set to 1, as there is no wbuffer in this cache system
@@ -68,6 +70,9 @@ module std_cache_subsystem import ariane_pkg::*; import std_cache_pkg::*; #(
     axi_rsp_t axi_resp_bypass;
     axi_req_t axi_req_data;
     axi_rsp_t axi_resp_data;
+
+    dcache_req_o_t d2i_cache_req_in;
+    dcache_req_i_t d2i_cache_req_out;
 
     logic              icache_busy;
     logic              dcache_busy;
@@ -91,10 +96,13 @@ module std_cache_subsystem import ariane_pkg::*; import std_cache_pkg::*; #(
         .busy_o     ( icache_busy           ),
         .stall_i    ( stall_i               ),
         .init_ni    ( init_ni               ),
+        .icache_spm_ways_i,
         .areq_i     ( icache_areq_i         ),
         .areq_o     ( icache_areq_o         ),
         .dreq_i     ( icache_dreq_i         ),
         .dreq_o     ( icache_dreq_o         ),
+        .ispm_req_i ( d2i_cache_req_out     ),
+        .ispm_req_o ( d2i_cache_req_in      ),
         .axi_req_o  ( axi_req_icache        ),
         .axi_resp_i ( axi_resp_icache       )
     );
@@ -114,6 +122,7 @@ module std_cache_subsystem import ariane_pkg::*; import std_cache_pkg::*; #(
       .clk_i,
       .rst_ni,
       .enable_i     ( dcache_enable_i        ),
+      .dcache_spm_ways_i,
       .flush_i      ( dcache_flush_i         ),
       .flush_ack_o  ( dcache_flush_ack_o     ),
       .miss_o       ( dcache_miss_o          ),
@@ -126,6 +135,8 @@ module std_cache_subsystem import ariane_pkg::*; import std_cache_pkg::*; #(
       .axi_data_i   ( axi_resp_data          ),
       .req_ports_i  ( dcache_req_ports_i     ),
       .req_ports_o  ( dcache_req_ports_o     ),
+      .ispm_req_i   ( d2i_cache_req_in       ),
+      .ispm_req_o   ( d2i_cache_req_out      ),
       .amo_req_i,
       .amo_resp_o
    );
