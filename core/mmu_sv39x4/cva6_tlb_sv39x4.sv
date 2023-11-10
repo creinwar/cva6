@@ -335,11 +335,20 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
         // incoming colouring information
         for(int unsigned n = 0; n < (TLB_ENTRIES-1); n++) begin
 
+            // The LSB contains the root of the tree, so whether or not a given tree branch is
+            // allowed to be used depends on the tree nodes one level further down towards the
+            // leaves (i.e. (2*n + 1) places ahead)
             if(n < ((TLB_ENTRIES/2)-1)) begin
                 plru_node_state_d[n] = plru_node_state_t'({|plru_node_state_d[2*n+2], |plru_node_state_d[2*n+1]});
 
+            // The topmost (TLB_ENTRIES/2) places are only related to the allowed colours and
+            // any current lockings (i.e. a TLB way is eligible for replacement iff we own
+            // that colour and this way is not currently locked)
             end else begin
+                // This gives the offset into the merged colour/locking input
                 automatic int unsigned bit_idx = n - ((TLB_ENTRIES/2) - 1);
+                // The next state is determined by two adjacent TLB ways
+                // (i.e. LEFT, RIGHT, BOTH, DISABLED)
                 automatic logic [1:0] n_st = (replacement_allowed >> 2*bit_idx);
                 plru_node_state_d[n] = plru_node_state_t'(n_st);
             end
@@ -349,8 +358,12 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
         plru_tree_n = plru_tree_q;
 
         // But if the colour config was changed, re-init the tree
+        // This makes sure the tree is in a known good state when switching
+        // colours or lockings
         if (plru_node_state_d != plru_node_state_q) begin
             for(int unsigned n = 0; n < (TLB_ENTRIES-1); n++) begin
+                // By default everything is initialized to "left"
+                // except right only nodes of course
                 if(plru_node_state_d[n] == RIGHT) begin
                     plru_tree_n[n] = 1'b1;
                 end else begin
@@ -428,12 +441,21 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
                 // lvl0 <=> MSB, lvl1 <=> MSB-1, ...
                 shift = $clog2(TLB_ENTRIES) - lvl;
 
-                // en &= plru_tree_q[idx_base + (i>>shift)] == ((i >> (shift-1)) & 1'b1);
                 new_index =  (i >> (shift-1)) & 32'b1;
+
+                // We have to treat left and right a bit differently
+                // This is the right case
                 if (new_index[0]) begin
-                  en &= plru_tree_q[idx_base + (i>>shift)] & (plru_node_state_q[idx_base + (i>>shift)] == BOTH || plru_node_state_q[idx_base + (i>>shift)] == RIGHT);
+                  en &=  plru_tree_q[idx_base + (i>>shift)] &
+                        (plru_node_state_q[idx_base + (i>>shift)] == BOTH ||
+                         plru_node_state_q[idx_base + (i>>shift)] == RIGHT);
+
+                // And this is the left case
                 end else begin
-                  en &= ~plru_tree_q[idx_base + (i>>shift)] & (plru_node_state_q[idx_base + (i>>shift)] == BOTH || plru_node_state_q[idx_base + (i>>shift)] == LEFT);
+                  en &= ~plru_tree_q[idx_base + (i>>shift)] &
+                        (plru_node_state_q[idx_base + (i>>shift)] == BOTH ||
+                         plru_node_state_q[idx_base + (i>>shift)] == LEFT);
+
                 end
             end
             replace_en[i] = en;
