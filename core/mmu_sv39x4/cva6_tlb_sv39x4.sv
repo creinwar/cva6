@@ -223,7 +223,7 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
             // Locked TLB entry
             // they take precedence over everything and are never flushed until
             // they are marked as no longer valid
-            if (locked_tlb_entries_i[i].valid) begin
+            if (i < ariane_pkg::NUM_TLB_LOCK_WAYS && locked_tlb_entries_i[i].valid) begin
                 // update tag array
                 tags_n[i] = '{
                     asid:       locked_tlb_entries_i[i].asid,
