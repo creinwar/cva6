@@ -472,7 +472,7 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
             tags_q      <= '{default: 0};
             content_q   <= '{default: 0};
             plru_tree_q <= '{default: 0};
-            plru_node_state_q <= plru_node_state_t'('{default: 0});
+            plru_node_state_q <= plru_node_state_t'('0);
         end else begin
             tags_q      <= tags_n;
             content_q   <= content_n;
