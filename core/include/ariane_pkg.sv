@@ -760,11 +760,7 @@ package ariane_pkg;
 
     localparam int unsigned INSTR_TLB_ENTRIES = cva6_config_pkg::CVA6ConfigInstrTlbEntries;
     localparam int unsigned DATA_TLB_ENTRIES  = cva6_config_pkg::CVA6ConfigDataTlbEntries;
-    localparam int unsigned NUM_COLOURS       = (INSTR_TLB_ENTRIES >= DATA_TLB_ENTRIES) ?
-                                                    ((DATA_TLB_ENTRIES >= cva6_config_pkg::CVA6ConfigNumColours) ?
-                                                    cva6_config_pkg::CVA6ConfigNumColours : DATA_TLB_ENTRIES)
-                                                 : ((INSTR_TLB_ENTRIES >= cva6_config_pkg::CVA6ConfigNumColours) ?
-                                                    cva6_config_pkg::CVA6ConfigNumColours : INSTR_TLB_ENTRIES);
+    localparam int unsigned NUM_COLOURS       = cva6_config_pkg::CVA6ConfigNumColours;
 
     localparam int unsigned NUM_TLB_LOCK_WAYS = (INSTR_TLB_ENTRIES >= DATA_TLB_ENTRIES) ?
                                                     ((DATA_TLB_ENTRIES >= cva6_config_pkg::CVA6ConfigLockableTlbWays) ?

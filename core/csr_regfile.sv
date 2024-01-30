@@ -200,6 +200,7 @@ module csr_regfile import ariane_pkg::*; #(
     riscv::senvcfg_rv_t senvcfg_q, senvcfg_d;
 
     logic [31:0] cur_clrs_q,  cur_clrs_d;
+    logic [31:0] last_clrs_q, last_clrs_d;
     riscv::pte_t [ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] tlb_lock_pte_q, tlb_lock_pte_d;
     ariane_pkg::tlb_lock_vpn_t [ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] tlb_lock_vpn_q, tlb_lock_vpn_d;
     ariane_pkg::tlb_lock_id_t [ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] tlb_lock_id_q, tlb_lock_id_d;
@@ -625,6 +626,8 @@ module csr_regfile import ariane_pkg::*; #(
                 // Resource Partitioning - Supervisor level
                 // They are hidden in the VS mode
                 riscv::CSR_CUR_CLRS:         if(!v_q) csr_rdata = cur_clrs_q; else read_access_exception = 1'b1;
+                riscv::CSR_LAST_CLRS:        if(!v_q) csr_rdata = last_clrs_q; else read_access_exception = 1'b1;
+                riscv::CSR_RSTR_LAST_CLRS:   if(!v_q) csr_rdata = '0; else read_access_exception = 1'b1;
                 riscv::CSR_TLB_LOCK_PTE_1:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 1 && !v_q) csr_rdata = tlb_lock_pte_q[0]; else read_access_exception = 1'b1;
                 riscv::CSR_TLB_LOCK_VPN_1:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 1 && !v_q) csr_rdata = tlb_lock_vpn_q[0]; else read_access_exception = 1'b1;
                 riscv::CSR_TLB_LOCK_ID_1:    if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 1 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[0]}; else read_access_exception = 1'b1;
@@ -782,6 +785,7 @@ module csr_regfile import ariane_pkg::*; #(
             mtval2_d            = mtval2_q;
         end
         cur_clrs_d              = cur_clrs_q;
+        last_clrs_d             = last_clrs_q;
         tlb_lock_pte_d          = tlb_lock_pte_q;
         tlb_lock_vpn_d          = tlb_lock_vpn_q;
         tlb_lock_id_d           = tlb_lock_id_q;
@@ -1402,7 +1406,27 @@ module csr_regfile import ariane_pkg::*; #(
                 riscv::CSR_MHPM_COUNTER_30H,
                 riscv::CSR_MHPM_COUNTER_31H :  begin perf_we_o = 1'b1; if (riscv::XLEN == 32) perf_data_o = csr_wdata;else update_access_exception = 1'b1;end
 
-                riscv::CSR_CUR_CLRS:           cur_clrs_d  = csr_wdata & {{riscv::XLEN-ariane_pkg::NUM_COLOURS{1'b0}}, {ariane_pkg::NUM_COLOURS{1'b1}}};
+                riscv::CSR_CUR_CLRS:            if (!v_q) begin
+                                                    cur_clrs_d  = csr_wdata & {{riscv::XLEN-ariane_pkg::NUM_COLOURS{1'b0}}, {ariane_pkg::NUM_COLOURS{1'b1}}};
+                                                    last_clrs_d = cur_clrs_q;
+                                                end else begin
+                                                    update_access_exception = 1'b1;
+                                                end
+
+                riscv::CSR_LAST_CLRS:           if (!v_q) begin
+                                                    last_clrs_d = csr_wdata & {{riscv::XLEN-ariane_pkg::NUM_COLOURS{1'b0}}, {ariane_pkg::NUM_COLOURS{1'b1}}};
+                                                end else begin
+                                                    update_access_exception = 1'b1;
+                                                end
+
+                riscv::CSR_RSTR_LAST_CLRS:      if (!v_q) begin
+                                                    if(csr_wdata & 1'b1) begin
+                                                        cur_clrs_d = last_clrs_q;
+                                                    end
+                                                end else begin
+                                                    update_access_exception = 1'b1;
+                                                end
+
                 riscv::CSR_TLB_LOCK_PTE_1:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 1 && !v_q) tlb_lock_pte_d[0] = riscv::pte_t'(csr_wdata); else update_access_exception = 1'b1;
                 riscv::CSR_TLB_LOCK_VPN_1:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 1 && !v_q) tlb_lock_vpn_d[0] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
                 riscv::CSR_TLB_LOCK_ID_1:      if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 1 && !v_q) tlb_lock_id_d[0] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
@@ -2221,6 +2245,7 @@ module csr_regfile import ariane_pkg::*; #(
             menvcfg_q              <= '0;
             senvcfg_q              <= '0;
             cur_clrs_q             <= {{riscv::XLEN-ariane_pkg::NUM_COLOURS{1'b0}}, {ariane_pkg::NUM_COLOURS{1'b1}}};
+            last_clrs_q            <= {{riscv::XLEN-ariane_pkg::NUM_COLOURS{1'b0}}, {ariane_pkg::NUM_COLOURS{1'b1}}};
             tlb_lock_pte_q         <= '0;
             tlb_lock_vpn_q         <= '0;
             tlb_lock_id_q          <= '0;
@@ -2299,6 +2324,7 @@ module csr_regfile import ariane_pkg::*; #(
             menvcfg_q              <= menvcfg_d;
             senvcfg_q              <= senvcfg_d;
             cur_clrs_q             <= cur_clrs_d;
+            last_clrs_q            <= last_clrs_d;
             tlb_lock_pte_q         <= tlb_lock_pte_d;
             tlb_lock_vpn_q         <= tlb_lock_vpn_d;
             tlb_lock_id_q          <= tlb_lock_id_d;

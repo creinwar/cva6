@@ -94,14 +94,16 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
 
     logic [TLB_ENTRIES-1:0] replacement_allowed;
 
+    int unsigned clr_tlb_ratio = TLB_ENTRIES/ariane_pkg::NUM_COLOURS;
+
     // Figure out the currently writable TLB ways
     // I.e. the set of non-locked TLB ways which are allowed by our colour set
     always_comb begin
         for(int unsigned i = 0; i < TLB_ENTRIES; i++) begin
             if(i < ariane_pkg::NUM_TLB_LOCK_WAYS) begin
-                replacement_allowed[i] = cur_clrs_i[i] & ~locked_tlb_entries_i[i].valid;
+                replacement_allowed[i] = cur_clrs_i[i/clr_tlb_ratio] & ~locked_tlb_entries_i[i].valid;
             end else begin
-                replacement_allowed[i] = cur_clrs_i[i];
+                replacement_allowed[i] = cur_clrs_i[i/clr_tlb_ratio];
             end
         end
     end
@@ -472,7 +474,7 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
             tags_q      <= '{default: 0};
             content_q   <= '{default: 0};
             plru_tree_q <= '{default: 0};
-            plru_node_state_q <= plru_node_state_t'('0);
+            plru_node_state_q <= plru_node_state_t'('{default: 0});
         end else begin
             tags_q      <= tags_n;
             content_q   <= content_n;
@@ -492,8 +494,9 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
         else begin $error("TLB size must be a multiple of 2 and greater than 1"); $stop(); end
       assert (ASID_WIDTH >= 1)
         else begin $error("ASID width must be at least 1"); $stop(); end
-      assert (ariane_pkg::NUM_COLOURS == TLB_ENTRIES)
-        else begin $error("The number of colours must match the number of TLB entries for now"); $stop(); end
+      assert ((ariane_pkg::NUM_COLOURS <= TLB_ENTRIES) && (clr_tlb_ratio == 1 || (clr_tlb_ratio & (clr_tlb_ratio - 1)) == 0))
+        else begin $error("The number of colours must be less than or equal to\
+the number of TLB entries and their ratio must be a power of two"); $stop(); end
     end
 
     // Just for checking
