@@ -115,7 +115,19 @@ module csr_regfile import ariane_pkg::*; #(
     output logic                  perf_we_o,
     // PMPs
     output riscv::pmpcfg_t [15:0] pmpcfg_o,   // PMP configuration containing pmpcfg for max 16 PMPs
-    output logic [15:0][riscv::PLEN-3:0] pmpaddr_o            // PMP addresses
+    output logic [15:0][riscv::PLEN-3:0] pmpaddr_o,            // PMP addresses
+
+    // Channel-bench debugging
+    output logic [$clog2(ariane_pkg::DATA_TLB_ENTRIES)-1:0]  debug_entry_sel_data_o,
+    output logic [$clog2(ariane_pkg::INSTR_TLB_ENTRIES)-1:0] debug_entry_sel_instr_o,
+    input  riscv::pte_t cur_pte_data_i,
+    input  riscv::pte_t cur_pte_instr_i,
+    input  logic [63:0] cur_flags_data_i,
+    input  logic [63:0] cur_flags_instr_i,
+    input  logic [63:0] cur_vaddr_to_be_flushed_data_i,
+    input  logic [63:0] cur_vaddr_to_be_flushed_instr_i,
+    input  logic [ASID_WIDTH:0] cur_asid_flush_data_i,
+    input  logic [ASID_WIDTH:0] cur_asid_flush_instr_i
 );
     // internal signal to keep track of access exceptions
     logic        read_access_exception, update_access_exception, privilege_violation;
@@ -165,9 +177,9 @@ module csr_regfile import ariane_pkg::*; #(
     riscv::intthresh_rv_t mintthresh_q, mintthresh_d;
     riscv::xlen_t mcounteren_q,mcounteren_d;
     riscv::xlen_t mscratch_q,  mscratch_d;
-    riscv::xlen_t mepc_q,      mepc_d;
-    riscv::xlen_t mcause_q,    mcause_d;
-    riscv::xlen_t mtval_q,     mtval_d;
+    (* mark_debug = "true" *) riscv::xlen_t mepc_q,      mepc_d;
+    (* mark_debug = "true" *) riscv::xlen_t mcause_q,    mcause_d;
+    (* mark_debug = "true" *) riscv::xlen_t mtval_q,     mtval_d;
     riscv::xlen_t mtinst_q,    mtinst_d;
     riscv::xlen_t mtval2_q,    mtval2_d;
 
@@ -176,9 +188,9 @@ module csr_regfile import ariane_pkg::*; #(
     riscv::xlen_t scounteren_q,scounteren_d;
     riscv::xlen_t stvt_q,      stvt_d;
     riscv::xlen_t sscratch_q,  sscratch_d;
-    riscv::xlen_t sepc_q,      sepc_d;
-    riscv::xlen_t scause_q,    scause_d;
-    riscv::xlen_t stval_q,     stval_d;
+    (* mark_debug = "true" *) riscv::xlen_t sepc_q,      sepc_d;
+    (* mark_debug = "true" *) riscv::xlen_t scause_q,    scause_d;
+    (* mark_debug = "true" *) riscv::xlen_t stval_q,     stval_d;
 
     riscv::xlen_t hedeleg_q,   hedeleg_d;
     riscv::xlen_t hideleg_q,   hideleg_d;
@@ -190,9 +202,9 @@ module csr_regfile import ariane_pkg::*; #(
 
     riscv::xlen_t vstvec_q,    vstvec_d;
     riscv::xlen_t vsscratch_q, vsscratch_d;
-    riscv::xlen_t vsepc_q,     vsepc_d;
-    riscv::xlen_t vscause_q,   vscause_d;
-    riscv::xlen_t vstval_q,    vstval_d;
+    (* mark_debug = "true" *) riscv::xlen_t vsepc_q,     vsepc_d;
+    (* mark_debug = "true" *) riscv::xlen_t vscause_q,   vscause_d;
+    (* mark_debug = "true" *) riscv::xlen_t vstval_q,    vstval_d;
     riscv::intthresh_rv_t vsintthresh_q, vsintthresh_d;
 
     // Environment Configuration Registers
@@ -204,6 +216,7 @@ module csr_regfile import ariane_pkg::*; #(
     riscv::pte_t [ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] tlb_lock_pte_q, tlb_lock_pte_d;
     ariane_pkg::tlb_lock_vpn_t [ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] tlb_lock_vpn_q, tlb_lock_vpn_d;
     ariane_pkg::tlb_lock_id_t [ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] tlb_lock_id_q, tlb_lock_id_d;
+    logic [63:0] ctxt_switch_debug_d, ctxt_switch_debug_q;
     riscv::xlen_t dcache_q,    dcache_d;
     riscv::xlen_t icache_q,    icache_d;
     riscv::xlen_t fence_t_pad_q, fence_t_pad_d;
@@ -238,6 +251,23 @@ module csr_regfile import ariane_pkg::*; #(
             locked_tlb_entries_o[i].valid       = tlb_lock_pte_q[i].v & (tlb_lock_vpn_q[i].size != INVALID) & tlb_lock_id_q[i].valid;
         end
     end
+
+    // Channel-bench debugging registers
+    logic [$clog2(ariane_pkg::DATA_TLB_ENTRIES)-1:0]  debug_entry_sel_data_d, debug_entry_sel_data_q;
+    logic [$clog2(ariane_pkg::INSTR_TLB_ENTRIES)-1:0] debug_entry_sel_instr_d, debug_entry_sel_instr_q;
+    logic [63:0] tlb_debug_vaddr_data_d, tlb_debug_vaddr_data_q;
+    logic [63:0] tlb_debug_vaddr_instr_d, tlb_debug_vaddr_instr_q;
+    logic [63:0] tlb_debug_asid_data_d, tlb_debug_asid_data_q;
+    logic [63:0] tlb_debug_asid_instr_d, tlb_debug_asid_instr_q;
+    logic [32:0] tlb_debug_asid_ctr_data, tlb_debug_asid_ctr_instr;
+
+
+    assign debug_entry_sel_data_o = debug_entry_sel_data_q;
+    assign debug_entry_sel_instr_o = debug_entry_sel_instr_q;
+    assign tlb_debug_vaddr_data_d   = (cur_asid_flush_data_i[ASID_WIDTH])   ? cur_vaddr_to_be_flushed_data_i : tlb_debug_vaddr_data_q;
+    assign tlb_debug_vaddr_instr_d  = (cur_asid_flush_instr_i[ASID_WIDTH])  ? cur_vaddr_to_be_flushed_instr_i : tlb_debug_vaddr_instr_q;
+    assign tlb_debug_asid_ctr_data  = tlb_debug_asid_data_q[31:0] + 32'b1;
+    assign tlb_debug_asid_ctr_instr = tlb_debug_asid_instr_q[31:0] + 32'b1;
 
     riscv::fcsr_t fcsr_q, fcsr_d;
     // ----------------
@@ -281,6 +311,14 @@ module csr_regfile import ariane_pkg::*; #(
         virtual_read_access_exception = 1'b0;
         csr_rdata = '0;
         perf_addr_o = conv_csr_addr.address[11:0];
+
+
+        tlb_debug_asid_data_d = (cur_asid_flush_data_i[ASID_WIDTH]) ?
+                                {{{(32-ASID_WIDTH){1'b0}}, cur_asid_flush_data_i[ASID_WIDTH-1:0]}, tlb_debug_asid_ctr_data[31:0]} :
+                                tlb_debug_asid_data_q;
+        tlb_debug_asid_instr_d = (cur_asid_flush_instr_i[ASID_WIDTH]) ?
+                                {{{(32-ASID_WIDTH){1'b0}}, cur_asid_flush_instr_i[ASID_WIDTH-1:0]}, tlb_debug_asid_ctr_instr[31:0]} :
+                                tlb_debug_asid_instr_q;
 
         if (csr_read) begin
             unique case (conv_csr_addr.address)
@@ -653,6 +691,26 @@ module csr_regfile import ariane_pkg::*; #(
                 riscv::CSR_TLB_LOCK_VPN_8:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 8 && !v_q) csr_rdata = tlb_lock_vpn_q[7]; else read_access_exception = 1'b1;
                 riscv::CSR_TLB_LOCK_ID_8:    if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 8 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[7]}; else read_access_exception = 1'b1;
 
+                riscv::CSR_CTXT_SWTCH_DBG:      csr_rdata = ctxt_switch_debug_q;
+
+                // Channel-bench debugging
+                riscv::CSR_TLB_DBG_SEL_DATA:    csr_rdata = {{(riscv::XLEN-$clog2(ariane_pkg::DATA_TLB_ENTRIES)){1'b0}}, debug_entry_sel_data_q};
+                riscv::CSR_TLB_DBG_SEL_INSTR:   csr_rdata = {{(riscv::XLEN-$clog2(ariane_pkg::INSTR_TLB_ENTRIES)){1'b0}}, debug_entry_sel_instr_q};
+                riscv::CSR_TLB_DBG_PTE_DATA:    csr_rdata = cur_pte_data_i;
+                riscv::CSR_TLB_DBG_PTE_INSTR:   csr_rdata = cur_pte_instr_i;
+                riscv::CSR_TLB_DBG_FLAGS_DATA:  csr_rdata = cur_flags_data_i;
+                riscv::CSR_TLB_DBG_FLAGS_INSTR: csr_rdata = cur_flags_instr_i;
+                riscv::CSR_TLB_DBG_VADDR_FLUSH_DATA:    csr_rdata = tlb_debug_vaddr_data_q;
+                riscv::CSR_TLB_DBG_VADDR_FLUSH_INSTR:   csr_rdata = tlb_debug_vaddr_instr_q;
+                riscv::CSR_TLB_DBG_ASID_FLUSH_DATA: begin
+                    csr_rdata = tlb_debug_asid_data_q;
+                    tlb_debug_asid_data_d = '0;
+                end
+                riscv::CSR_TLB_DBG_ASID_FLUSH_INSTR: begin
+                    csr_rdata = tlb_debug_asid_instr_q;
+                    tlb_debug_asid_instr_d = '0;
+                end
+
                 // custom (non RISC-V) cache control
                 riscv::CSR_DCACHE:           csr_rdata = dcache_q;
                 riscv::CSR_ICACHE:           csr_rdata = icache_q;
@@ -789,6 +847,10 @@ module csr_regfile import ariane_pkg::*; #(
         tlb_lock_pte_d          = tlb_lock_pte_q;
         tlb_lock_vpn_d          = tlb_lock_vpn_q;
         tlb_lock_id_d           = tlb_lock_id_q;
+        ctxt_switch_debug_d     = ctxt_switch_debug_q;
+        // Channel-bench debugging
+        debug_entry_sel_data_d  = debug_entry_sel_data_q;
+        debug_entry_sel_instr_d = debug_entry_sel_instr_q;
         dcache_d                = dcache_q;
         icache_d                = icache_q;
         fence_t_pad_d           = fence_t_pad_q;
@@ -1451,6 +1513,14 @@ module csr_regfile import ariane_pkg::*; #(
                 riscv::CSR_TLB_LOCK_PTE_8:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 8 && !v_q) tlb_lock_pte_d[7] = riscv::pte_t'(csr_wdata); else update_access_exception = 1'b1;
                 riscv::CSR_TLB_LOCK_VPN_8:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 8 && !v_q) tlb_lock_vpn_d[7] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
                 riscv::CSR_TLB_LOCK_ID_8:      if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 8 && !v_q) tlb_lock_id_d[7] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
+
+                riscv::CSR_CTXT_SWTCH_DBG:     ctxt_switch_debug_d = csr_wdata;
+
+                // Channel-bench debugging
+                riscv::CSR_TLB_DBG_SEL_DATA:   debug_entry_sel_data_d = csr_wdata[$clog2(ariane_pkg::DATA_TLB_ENTRIES)-1:0];
+                riscv::CSR_TLB_DBG_SEL_INSTR:  debug_entry_sel_instr_d = csr_wdata[$clog2(ariane_pkg::INSTR_TLB_ENTRIES)-1:0];
+
+
                 riscv::CSR_DCACHE:             dcache_d    = {{riscv::XLEN-1{1'b0}}, csr_wdata[0]}; // enable bit
                 riscv::CSR_ICACHE:             icache_d    = {{riscv::XLEN-1{1'b0}}, csr_wdata[0]}; // enable bit
                 riscv::CSR_FENCE_T_PAD:        fence_t_pad_d = {{riscv::XLEN-32{1'b0}}, csr_wdata[31:0]};
@@ -2249,6 +2319,13 @@ module csr_regfile import ariane_pkg::*; #(
             tlb_lock_pte_q         <= '0;
             tlb_lock_vpn_q         <= '0;
             tlb_lock_id_q          <= '0;
+            ctxt_switch_debug_q    <= '0;
+            debug_entry_sel_data_q <= '0;
+            debug_entry_sel_instr_q <= '0;
+            tlb_debug_asid_data_q  <= '0;
+            tlb_debug_asid_instr_q <= '0;
+            tlb_debug_vaddr_data_q <= '0;
+            tlb_debug_vaddr_instr_q <= '0;
             dcache_q               <= {{riscv::XLEN-1{1'b0}}, 1'b1};
             icache_q               <= {{riscv::XLEN-1{1'b0}}, 1'b1};
             fence_t_pad_q          <= {riscv::XLEN{1'b0}};
@@ -2328,6 +2405,13 @@ module csr_regfile import ariane_pkg::*; #(
             tlb_lock_pte_q         <= tlb_lock_pte_d;
             tlb_lock_vpn_q         <= tlb_lock_vpn_d;
             tlb_lock_id_q          <= tlb_lock_id_d;
+            ctxt_switch_debug_q    <= ctxt_switch_debug_d;
+            debug_entry_sel_data_q <= debug_entry_sel_data_d;
+            debug_entry_sel_instr_q <= debug_entry_sel_instr_d;
+            tlb_debug_asid_data_q  <= tlb_debug_asid_data_d;
+            tlb_debug_asid_instr_q <= tlb_debug_asid_instr_d;
+            tlb_debug_vaddr_data_q <= tlb_debug_vaddr_data_d;
+            tlb_debug_vaddr_instr_q <= tlb_debug_vaddr_instr_d;
             dcache_q               <= dcache_d;
             icache_q               <= icache_d;
             fence_t_pad_q          <= fence_t_pad_d;

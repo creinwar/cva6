@@ -48,7 +48,14 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
     input  logic [riscv::GPLEN-1:0] gpaddr_to_be_flushed_i,
     output logic                    lu_is_2M_o,
     output logic                    lu_is_1G_o,
-    output logic                    lu_hit_o
+    output logic                    lu_hit_o,
+
+    // Channel-bench debugging signals
+    input  logic [$clog2(TLB_ENTRIES)-1:0]  debug_entry_sel_i,
+    output riscv::pte_t cur_pte_o,
+    output logic [63:0] cur_flags_o,
+    output logic [63:0] cur_vaddr_to_be_flushed_o,
+    output logic [ASID_WIDTH:0] cur_asid_flush_o
 );
 
     // SV39 defines three levels of page tables
@@ -73,6 +80,22 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
       riscv::pte_t pte;
       riscv::pte_t gpte;
     } [TLB_ENTRIES-1:0] content_q, content_n;
+
+    struct packed {
+      logic [ASID_WIDTH-1:0]    asid;       // 16 bit
+      logic [VMID_WIDTH-1:0]    vmid;       // 14 bit
+      logic [riscv::GPPN2:0]    vpn2;       // 11 bit
+      logic [8:0]               vpn1;       //  9 bit
+      logic [8:0]               vpn0;       //  9 bit
+      logic                     v;          //  1 bit
+      logic                     is_2M;      //  1 bit
+      logic                     is_1G;      //  1 bit
+      logic                     locked;     //  1 bit
+      logic                     valid;      //  1 bit
+    } cur_flags_d, cur_flags_q;             // 64 bit
+
+    riscv::pte_t cur_pte_d, cur_pte_q;
+    logic [$clog2(TLB_ENTRIES)-1:0] debug_entry_sel_q;
 
     typedef enum logic[1:0] {
         DISABLED    = 2'b00,
@@ -107,6 +130,32 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
             end
         end
     end
+
+    // Channel-bench debugging
+    assign cur_flags_o = cur_flags_q;
+    assign cur_pte_o   = cur_pte_q;
+    always_comb begin
+        if(debug_entry_sel_q < TLB_ENTRIES) begin
+            cur_pte_d             = content_q[debug_entry_sel_q].gpte.v ? content_q[debug_entry_sel_q].gpte : content_q[debug_entry_sel_q].pte;
+            cur_flags_d.asid      = tags_q[debug_entry_sel_q].asid;
+            cur_flags_d.vmid      = tags_q[debug_entry_sel_q].vmid;
+            cur_flags_d.vpn2      = tags_q[debug_entry_sel_q].vpn2;
+            cur_flags_d.vpn1      = tags_q[debug_entry_sel_q].vpn1;
+            cur_flags_d.vpn0      = tags_q[debug_entry_sel_q].vpn0;
+            cur_flags_d.v         = tags_q[debug_entry_sel_q].v;
+            cur_flags_d.is_2M     = tags_q[debug_entry_sel_q].is_s_2M;
+            cur_flags_d.is_1G     = tags_q[debug_entry_sel_q].is_s_1G;
+            cur_flags_d.locked    = tags_q[debug_entry_sel_q].locked;
+            cur_flags_d.valid     = tags_q[debug_entry_sel_q].valid;
+        end else begin
+            cur_flags_d = '0;
+            cur_pte_d = '0;
+        end
+    end
+
+    assign cur_vaddr_to_be_flushed_o    = vaddr_to_be_flushed_i;
+    assign cur_asid_flush_o             = {flush_i, asid_to_be_flushed_i};
+
 
     //-------------
     // Translation
@@ -475,11 +524,17 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
             content_q   <= '{default: 0};
             plru_tree_q <= '{default: 0};
             plru_node_state_q <= plru_node_state_t'('{default: 0});
+            cur_pte_q   <= '{default: 0};
+            cur_flags_q <= '{default: 0};
+            debug_entry_sel_q <= '{default: 0};
         end else begin
             tags_q      <= tags_n;
             content_q   <= content_n;
             plru_tree_q <= plru_tree_n;
             plru_node_state_q <= plru_node_state_d;
+            cur_pte_q   <= cur_pte_d;
+            cur_flags_q <= cur_flags_d;
+            debug_entry_sel_q <= debug_entry_sel_i;
         end
     end
     //--------------

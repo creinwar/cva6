@@ -140,7 +140,19 @@ module ex_stage import ariane_pkg::*; #(
     output [riscv::PLEN-1:0]                       mem_paddr_o,
     output [(riscv::XLEN/8)-1:0]                   lsu_rmask_o,
     output [(riscv::XLEN/8)-1:0]                   lsu_wmask_o,
-    output [ariane_pkg::TRANS_ID_BITS-1:0]         lsu_addr_trans_id_o
+    output [ariane_pkg::TRANS_ID_BITS-1:0]         lsu_addr_trans_id_o,
+
+    // Channel-bench debugging
+    input  logic [$clog2(ariane_pkg::DATA_TLB_ENTRIES)-1:0]  debug_entry_sel_data_i,
+    input  logic [$clog2(ariane_pkg::INSTR_TLB_ENTRIES)-1:0] debug_entry_sel_instr_i,
+    output riscv::pte_t cur_pte_data_o,
+    output riscv::pte_t cur_pte_instr_o,
+    output logic [63:0] cur_flags_data_o,
+    output logic [63:0] cur_flags_instr_o,
+    output logic [63:0] cur_vaddr_to_be_flushed_data_o,
+    output logic [63:0] cur_vaddr_to_be_flushed_instr_o,
+    output logic [ASID_WIDTH:0] cur_asid_flush_data_o,
+    output logic [ASID_WIDTH:0] cur_asid_flush_instr_o
 );
 
     // -------------------------
@@ -379,7 +391,18 @@ module ex_stage import ariane_pkg::*; #(
         .mem_paddr_o,
         .lsu_rmask_o,
         .lsu_wmask_o,
-        .lsu_addr_trans_id_o
+        .lsu_addr_trans_id_o,
+        // Channel-bench debugging
+        .debug_entry_sel_data_i,
+        .debug_entry_sel_instr_i,
+        .cur_pte_data_o,
+        .cur_pte_instr_o,
+        .cur_flags_data_o,
+        .cur_flags_instr_o,
+        .cur_vaddr_to_be_flushed_data_o,
+        .cur_vaddr_to_be_flushed_instr_o,
+        .cur_asid_flush_data_o,
+        .cur_asid_flush_instr_o
     );
 
     if (CVXIF_PRESENT) begin : gen_cvxif

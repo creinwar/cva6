@@ -68,7 +68,7 @@ module cva6 import ariane_pkg::*; #(
   logic                       v;
   exception_t                 ex_commit; // exception from commit stage
   bp_resolve_t                resolved_branch;
-  logic [riscv::VLEN-1:0]     pc_commit;
+  (* mark_debug = "true" *) logic [riscv::VLEN-1:0]     pc_commit;
   logic                       eret;
   logic [NR_COMMIT_PORTS-1:0] commit_ack;
   logic                       rst_uarch_n;
@@ -473,6 +473,15 @@ module cva6 import ariane_pkg::*; #(
     .*
   );
 
+
+  // Channel-bench debugging signals
+  logic [$clog2(ariane_pkg::DATA_TLB_ENTRIES)-1:0]  tlb_dbg_sel_data_csr_ex;
+  logic [$clog2(ariane_pkg::INSTR_TLB_ENTRIES)-1:0] tlb_dbg_sel_instr_csr_ex;
+  riscv::pte_t tlb_dbg_pte_data_csr_ex, tlb_dbg_pte_instr_csr_ex;
+  logic [63:0] tlb_dbg_flags_data_csr_ex, tlb_dbg_flags_instr_csr_ex;
+  logic [63:0] tlb_dbg_vaddr_flush_data_csr_ex, tlb_dbg_vaddr_flush_instr_csr_ex;
+  logic [ASID_WIDTH:0] tlb_dbg_asid_flush_data_csr_ex, tlb_dbg_asid_flush_instr_csr_ex;
+
   // ---------
   // EX
   // ---------
@@ -596,7 +605,18 @@ module cva6 import ariane_pkg::*; #(
     .mem_paddr_o            ( mem_paddr                   ),
     .lsu_rmask_o            ( lsu_rmask                   ),
     .lsu_wmask_o            ( lsu_wmask                   ),
-    .lsu_addr_trans_id_o    ( lsu_addr_trans_id           )
+    .lsu_addr_trans_id_o    ( lsu_addr_trans_id           ),
+    // Channel-bench debugging
+    .debug_entry_sel_data_i ( tlb_dbg_sel_data_csr_ex     ),
+    .debug_entry_sel_instr_i( tlb_dbg_sel_instr_csr_ex    ),
+    .cur_pte_data_o         ( tlb_dbg_pte_data_csr_ex     ),
+    .cur_pte_instr_o        ( tlb_dbg_pte_instr_csr_ex    ),
+    .cur_flags_data_o       ( tlb_dbg_flags_data_csr_ex   ),
+    .cur_flags_instr_o      ( tlb_dbg_flags_instr_csr_ex  ),
+    .cur_vaddr_to_be_flushed_data_o ( tlb_dbg_vaddr_flush_data_csr_ex   ),
+    .cur_vaddr_to_be_flushed_instr_o ( tlb_dbg_vaddr_flush_instr_csr_ex ),
+    .cur_asid_flush_data_o  ( tlb_dbg_asid_flush_data_csr_ex            ),
+    .cur_asid_flush_instr_o ( tlb_dbg_asid_flush_instr_csr_ex           )
   );
 
   // ---------
@@ -728,6 +748,17 @@ module cva6 import ariane_pkg::*; #(
     .perf_we_o              ( we_csr_perf                   ),
     .pmpcfg_o               ( pmpcfg                        ),
     .pmpaddr_o              ( pmpaddr                       ),
+    // Channel-bench debugging
+    .debug_entry_sel_data_o ( tlb_dbg_sel_data_csr_ex     ),
+    .debug_entry_sel_instr_o( tlb_dbg_sel_instr_csr_ex    ),
+    .cur_pte_data_i         ( tlb_dbg_pte_data_csr_ex     ),
+    .cur_pte_instr_i        ( tlb_dbg_pte_instr_csr_ex    ),
+    .cur_flags_data_i       ( tlb_dbg_flags_data_csr_ex   ),
+    .cur_flags_instr_i      ( tlb_dbg_flags_instr_csr_ex  ),
+    .cur_vaddr_to_be_flushed_data_i ( tlb_dbg_vaddr_flush_data_csr_ex   ),
+    .cur_vaddr_to_be_flushed_instr_i ( tlb_dbg_vaddr_flush_instr_csr_ex ),
+    .cur_asid_flush_data_i  ( tlb_dbg_asid_flush_data_csr_ex            ),
+    .cur_asid_flush_instr_i ( tlb_dbg_asid_flush_instr_csr_ex           ),
     .debug_req_i,
     .ipi_i,
     .irq_i,

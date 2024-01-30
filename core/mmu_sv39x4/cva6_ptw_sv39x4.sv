@@ -29,7 +29,7 @@ module cva6_ptw_sv39x4 import ariane_pkg::*; #(
     input  logic                    flush_i,                // flush everything, we need to do this because
                                                             // actually everything we do is speculative at this stage
                                                             // e.g.: there could be a CSR instruction that changes everything
-    output logic                    ptw_active_o,
+    (* mark_debug = "true" *) output logic                    ptw_active_o,
     output logic                    walking_instr_o,        // set when walking for TLB
     output logic                    ptw_error_o,            // set when an error occurred
     output logic                    ptw_error_at_g_st_o,    // set when an error occurred at the G-Stage
@@ -45,8 +45,8 @@ module cva6_ptw_sv39x4 import ariane_pkg::*; #(
 
     input  logic                    lsu_is_store_i,         // this translation was triggered by a store
     // PTW memory interface
-    input  dcache_req_o_t           req_port_i,
-    output dcache_req_i_t           req_port_o,
+    (* mark_debug = "true" *) input  dcache_req_o_t           req_port_i,
+    (* mark_debug = "true" *) output dcache_req_i_t           req_port_o,
 
 
     // to TLBs, update logic
@@ -64,9 +64,9 @@ module cva6_ptw_sv39x4 import ariane_pkg::*; #(
     input  logic                    itlb_hit_i,
     input  logic [riscv::VLEN-1:0]  itlb_vaddr_i,
 
-    input  logic                    dtlb_access_i,
-    input  logic                    dtlb_hit_i,
-    input  logic [riscv::VLEN-1:0]  dtlb_vaddr_i,
+    (* mark_debug = "true" *) input  logic                    dtlb_access_i,
+    (* mark_debug = "true" *) input  logic                    dtlb_hit_i,
+    (* mark_debug = "true" *) input  logic [riscv::VLEN-1:0]  dtlb_vaddr_i,
     // from CSR file
     input  logic [riscv::PPNW-1:0]  satp_ppn_i, // ppn from satp
     input  logic [riscv::PPNW-1:0]  vsatp_ppn_i, // ppn from satp

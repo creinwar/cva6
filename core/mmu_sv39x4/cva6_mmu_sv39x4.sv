@@ -88,7 +88,19 @@ module cva6_mmu_sv39x4 import ariane_pkg::*; #(
     output dcache_req_i_t                   req_port_o,
     // PMP
     input  riscv::pmpcfg_t [15:0]           pmpcfg_i,
-    input  logic [15:0][riscv::PLEN-3:0]    pmpaddr_i
+    input  logic [15:0][riscv::PLEN-3:0]    pmpaddr_i,
+
+    // Channel-bench debugging
+    input  logic [$clog2(DATA_TLB_ENTRIES)-1:0]  debug_entry_sel_data_i,
+    input  logic [$clog2(INSTR_TLB_ENTRIES)-1:0] debug_entry_sel_instr_i,
+    output riscv::pte_t cur_pte_data_o,
+    output riscv::pte_t cur_pte_instr_o,
+    output logic [63:0] cur_flags_data_o,
+    output logic [63:0] cur_flags_instr_o,
+    output logic [63:0] cur_vaddr_to_be_flushed_data_o,
+    output logic [63:0] cur_vaddr_to_be_flushed_instr_o,
+    output logic [ASID_WIDTH:0] cur_asid_flush_data_o,
+    output logic [ASID_WIDTH:0] cur_asid_flush_instr_o
 );
 
     logic                   iaccess_err;   // insufficient privilege to access this instruction page
@@ -182,7 +194,12 @@ module cva6_mmu_sv39x4 import ariane_pkg::*; #(
 
         .lu_is_2M_o       ( itlb_is_2M                 ),
         .lu_is_1G_o       ( itlb_is_1G                 ),
-        .lu_hit_o         ( itlb_lu_hit                )
+        .lu_hit_o         ( itlb_lu_hit                ),
+        .debug_entry_sel_i( debug_entry_sel_instr_i    ),
+        .cur_pte_o        ( cur_pte_instr_o            ),
+        .cur_flags_o      ( cur_flags_instr_o          ),
+        .cur_vaddr_to_be_flushed_o ( cur_vaddr_to_be_flushed_instr_o ),
+        .cur_asid_flush_o ( cur_asid_flush_instr_o     )
     );
 
     cva6_tlb_sv39x4 #(
@@ -217,7 +234,12 @@ module cva6_mmu_sv39x4 import ariane_pkg::*; #(
 
         .lu_is_2M_o       ( dtlb_is_2M                  ),
         .lu_is_1G_o       ( dtlb_is_1G                  ),
-        .lu_hit_o         ( dtlb_lu_hit                 )
+        .lu_hit_o         ( dtlb_lu_hit                 ),
+        .debug_entry_sel_i( debug_entry_sel_data_i      ),
+        .cur_pte_o        ( cur_pte_data_o              ),
+        .cur_flags_o      ( cur_flags_data_o            ),
+        .cur_vaddr_to_be_flushed_o ( cur_vaddr_to_be_flushed_data_o ),
+        .cur_asid_flush_o ( cur_asid_flush_data_o     )
     );
 
 
