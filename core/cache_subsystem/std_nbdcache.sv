@@ -11,7 +11,7 @@
 // Author: Florian Zaruba, ETH Zurich
 // Date: 13.10.2017
 // Description: Nonblocking private L1 dcache
-
+`include "common_cells/registers.svh"
 
 module std_nbdcache import std_cache_pkg::*; import ariane_pkg::*; #(
     parameter ariane_cfg_t ArianeCfg        = ArianeDefaultConfig, // contains cacheable regions
@@ -25,6 +25,7 @@ module std_nbdcache import std_cache_pkg::*; import ariane_pkg::*; #(
     input  logic                           rst_ni,      // Asynchronous reset active low
     // Cache management
     input  logic                           enable_i,    // from CSR
+    input  logic [ariane_pkg::DCACHE_SET_ASSOC-1:0] dcache_spm_ways_i,
     input  logic                           flush_i,     // high until acknowledged
     output logic                           flush_ack_o, // send a single cycle acknowledge signal when the cache is flushed
     output logic                           miss_o,      // we missed on a LD/ST
@@ -83,17 +84,259 @@ import std_cache_pkg::*;
     // -------------------------------
     // Arbiter <-> Datram,
     // -------------------------------
-    logic [DCACHE_SET_ASSOC-1:0]         req_ram;
-    logic [DCACHE_INDEX_WIDTH-1:0]       addr_ram;
-    logic                                we_ram;
-    cache_line_t                         wdata_ram;
-    cache_line_t [DCACHE_SET_ASSOC-1:0]  rdata_ram;
-    cl_be_t                              be_ram;
+    logic [DCACHE_SET_ASSOC-1:0]         req_cache;
+    logic [DCACHE_INDEX_WIDTH-1:0]       addr_cache;
+    logic                                we_cache;
+    cache_line_t                         wdata_cache;
+    cache_line_t [DCACHE_SET_ASSOC-1:0]  rdata_cache;
+    cl_be_t                              be_cache;
     vldrty_t [DCACHE_SET_ASSOC-1:0]      be_valid_dirty_ram;
+
+    logic [DCACHE_SET_ASSOC-1:0]         req_spm;
+    logic [DCACHE_INDEX_WIDTH-1:0]       addr_spm;
+    logic                                we_spm;
+    logic [(DCACHE_TAG_WIDTH+DCACHE_LINE_WIDTH)-1:0]    wdata_spm;
+    logic [DCACHE_SET_ASSOC-1:0][(DCACHE_TAG_WIDTH+DCACHE_LINE_WIDTH)-1:0]  rdata_spm;
+    logic [((DCACHE_TAG_WIDTH+DCACHE_LINE_WIDTH+7)/8)-1:0] be_spm;
+
+    logic [DCACHE_SET_ASSOC-1:0]                                                    req_ram;
+    logic [DCACHE_SET_ASSOC-1:0][DCACHE_INDEX_WIDTH-1:0]                            addr_ram;
+    logic [DCACHE_SET_ASSOC-1:0]                                                    we_ram;
+    logic [DCACHE_SET_ASSOC-1:0][(DCACHE_TAG_WIDTH+DCACHE_LINE_WIDTH)-1:0]          wdata_ram;
+    logic [DCACHE_SET_ASSOC-1:0][(DCACHE_TAG_WIDTH+DCACHE_LINE_WIDTH)-1:0]          rdata_ram;
+    logic [DCACHE_SET_ASSOC-1:0][((DCACHE_TAG_WIDTH+DCACHE_LINE_WIDTH+7)/8)-1:0]    be_ram;
 
     // Busy signals
     logic miss_handler_busy;
     assign busy_o = |busy | miss_handler_busy;
+
+    typedef enum logic [2:0] {
+        IDLE = 0,
+        WAIT_TAG,
+        WAIT_CACHE,
+        WAIT_SPM,
+        WRITE
+    } addr_decode_state_t;
+
+    dcache_req_i_t [2:0]    cache_ports_in, spm_ports_in;
+    dcache_req_o_t [2:0]    cache_ports_out, spm_ports_out;
+
+    // Debugging - if all cache ways are seeing a request, we want only reads
+    logic multi_cache_write;
+    assign multi_cache_write = ((req_ram & ~dcache_spm_ways_i) == ~dcache_spm_ways_i) &  we_cache;
+
+
+    // ------------------
+    // Cache vs. SPM split
+    // ------------------
+    generate
+        for (genvar i = 0; i < 3; i++) begin: address_decode
+
+            addr_decode_state_t adec_state_d, adec_state_q;
+            logic [DCACHE_INDEX_WIDTH-1:0] addr_idx_d, addr_idx_q;
+            logic [DCACHE_TAG_WIDTH-1:0] addr_tag_d, addr_tag_q;
+            logic spm_req_d, spm_req_q;
+
+            always_comb begin
+                addr_idx_d      = addr_idx_q;
+                addr_tag_d      = addr_tag_q;
+                adec_state_d    = adec_state_q;
+                spm_req_d       = spm_req_q;
+
+                // By default we forward all communication to
+                // both targets, minus the ready/valid signals
+                spm_ports_in[i]             = req_ports_i[i];
+                spm_ports_in[i].data_req    = 1'b0;
+                spm_ports_in[i].tag_valid   = 1'b0;
+                spm_ports_in[i].kill_req    = 1'b0;
+
+                cache_ports_in[i]           = req_ports_i[i];
+                cache_ports_in[i].data_req  = 1'b0;
+                cache_ports_in[i].tag_valid = 1'b0;
+                cache_ports_in[i].kill_req  = 1'b0;
+
+                // As the answer will most likely come from the
+                // cache we forward that by default, also without ready/valid
+                req_ports_o[i]              = cache_ports_out[i];
+                req_ports_o[i].data_gnt     = 1'b0;
+                req_ports_o[i].data_rvalid  = 1'b0;
+
+                unique case (adec_state_q)
+                    IDLE: begin
+                        spm_req_d = 1'b0;
+
+                        if (req_ports_i[i].data_req) begin
+                            addr_idx_d = req_ports_i[i].address_index;
+
+                            if(req_ports_i[i].data_we) begin
+                                adec_state_d = WRITE;
+
+                                spm_req_d = &req_ports_i[i].address_tag[DCACHE_TAG_WIDTH-1 -: 36];
+
+                                if(spm_req_d) begin
+
+                                    spm_ports_in[i] = req_ports_i[i];
+                                    req_ports_o[i] = spm_ports_out[i];
+
+                                end else begin
+
+                                    cache_ports_in[i] = req_ports_i[i];
+                                    req_ports_o[i] = cache_ports_out[i];
+
+                                end
+
+                                // If the write could be acknowledged already
+                                // we stay in the idle state
+                                if(req_ports_o[i].data_gnt) begin
+                                    adec_state_d = IDLE;
+                                end
+
+                            end else begin
+                                adec_state_d = WAIT_TAG;
+
+                                cache_ports_in[i] = req_ports_i[i];
+                                req_ports_o[i] = cache_ports_out[i];
+
+                            end
+                        end
+                    end
+
+                    WAIT_TAG: begin
+                        // By default we forward to the cache
+                        cache_ports_in[i] = req_ports_i[i];
+                        req_ports_o[i] = cache_ports_out[i];
+
+                        if (req_ports_i[i].tag_valid) begin
+                            spm_req_d = &req_ports_i[i].address_tag[DCACHE_TAG_WIDTH-1 -: 36];
+
+                            if(spm_req_d) begin
+                                adec_state_d = WAIT_SPM;
+
+                                addr_tag_d = req_ports_i[i].address_tag;
+
+                                spm_ports_in[i] = req_ports_i[i];
+                                req_ports_o[i] = spm_ports_out[i];
+
+                                spm_ports_in[i].address_index = addr_idx_q;
+
+                                // All reads have been granted by the cache before,
+                                // this is just to signal a pending request to the SPM controller
+                                spm_ports_in[i].data_req = 1'b1;
+
+                                // Kill the started cache request as this is a SPM access
+                                cache_ports_in[i].kill_req = 1'b1;
+
+                            end else begin
+                                adec_state_d = WAIT_CACHE;
+
+                            end
+
+                            // If the request could already be answered in this cycle
+                            // we return to the idle state
+                            if(req_ports_o[i].data_rvalid) begin
+                                adec_state_d = IDLE;
+                            end
+
+                            if(req_ports_o[i].data_gnt) begin
+                                adec_state_d = WAIT_TAG;
+                            end
+                        end
+                    end
+
+                    WAIT_CACHE: begin
+
+                        cache_ports_in[i] = req_ports_i[i];
+                        req_ports_o[i] = cache_ports_out[i];
+
+                        if(req_ports_o[i].data_rvalid) begin
+                            adec_state_d = IDLE;
+                        end
+
+                        if(req_ports_o[i].data_gnt) begin
+                            adec_state_d = WAIT_TAG;
+                        end
+
+                    end
+
+                    WAIT_SPM: begin
+
+                        spm_ports_in[i] = req_ports_i[i];
+                        req_ports_o[i] = spm_ports_out[i];
+
+                        if(req_ports_o[i].data_rvalid) begin
+                            adec_state_d = IDLE;
+                        end
+                    end
+
+                    WRITE: begin
+                        if(spm_req_q) begin
+
+                            spm_ports_in[i] = req_ports_i[i];
+                            req_ports_o[i] = spm_ports_out[i];
+
+                        end else begin
+
+                            cache_ports_in[i] = req_ports_i[i];
+                            req_ports_o[i] = cache_ports_out[i];
+
+                        end
+
+                        if(req_ports_o[i].data_gnt) begin
+                            adec_state_d = IDLE;
+                            spm_req_d = 0;
+                        end
+                    end
+
+                    default: begin
+                    end
+                endcase
+
+                // If we get a kill request at any point in time,
+                // we just return to idle
+                if(req_ports_i[i].kill_req) begin
+                    adec_state_d = IDLE;
+                end
+
+            end
+
+            `FF(addr_idx_q, addr_idx_d, '0, clk_i, rst_ni)
+            `FF(addr_tag_q, addr_tag_d, '0, clk_i, rst_ni)
+            `FF(adec_state_q, adec_state_d, IDLE, clk_i, rst_ni)
+            `FF(spm_req_q, spm_req_d, 1'b0, clk_i, rst_ni)
+
+        end
+    endgenerate
+
+    // ------------------
+    // SPM Controller
+    // ------------------
+
+    spm_ctrl #(
+        .NR_PORTS       ( 3                                     ),
+        .NR_WAYS        ( DCACHE_SET_ASSOC                      ),
+        .LINE_WIDTH     ( DCACHE_LINE_WIDTH                     ),
+        .ADDR_WIDTH     ( DCACHE_INDEX_WIDTH                    ),
+        .MEMORY_WIDTH   ( DCACHE_TAG_WIDTH + DCACHE_LINE_WIDTH  ),
+        .IDX_WIDTH      ( DCACHE_INDEX_WIDTH                    ),
+        .NR_WAIT_STAGES ( 1                                     )
+    ) i_spm_ctrl (
+        .clk_i,
+        .rst_ni,
+
+        .active_ways_i      ( dcache_spm_ways_i ),
+
+        // Request ports
+        .spm_req_ports_i    ( spm_ports_in  ),
+        .spm_req_ports_o    ( spm_ports_out ),
+
+        .req_o              ( req_spm       ),
+        .addr_o             ( addr_spm      ),
+        .wdata_o            ( wdata_spm     ),
+        .we_o               ( we_spm        ),
+        .be_o               ( be_spm        ),
+        .rdata_i            ( rdata_spm     )
+    );
+
 
     // ------------------
     // Cache Controller
@@ -107,8 +350,8 @@ import std_cache_pkg::*;
                 .busy_o                ( busy            [i]  ),
                 .stall_i               ( stall_i | flush_i    ),
                 // from core
-                .req_port_i            ( req_ports_i     [i]  ),
-                .req_port_o            ( req_ports_o     [i]  ),
+                .req_port_i            ( cache_ports_in  [i]  ),
+                .req_port_o            ( cache_ports_out [i]  ),
                 // to SRAM array
                 .req_o                 ( req            [i+1] ),
                 .addr_o                ( addr           [i+1] ),
@@ -118,7 +361,8 @@ import std_cache_pkg::*;
                 .data_o                ( wdata          [i+1] ),
                 .we_o                  ( we             [i+1] ),
                 .be_o                  ( be             [i+1] ),
-                .hit_way_i             ( hit_way              ),
+                // Ensure that only cache owned ways can hit
+                .hit_way_i             ( hit_way & ~dcache_spm_ways_i ),
 
                 .miss_req_o            ( miss_req        [i]  ),
                 .miss_gnt_i            ( miss_gnt        [i]  ),
@@ -151,6 +395,7 @@ import std_cache_pkg::*;
         .busy_o                 ( miss_handler_busy    ),
         .flush_i                ( flush_i              ),
         .busy_i                 ( |busy                ),
+        .spm_ways_i             ( dcache_spm_ways_i    ),
         // AMOs
         .amo_req_i              ( amo_req_i            ),
         .amo_resp_o             ( amo_resp_o           ),
@@ -184,38 +429,44 @@ import std_cache_pkg::*;
     // Memory Arrays
     // --------------
     for (genvar i = 0; i < DCACHE_SET_ASSOC; i++) begin : sram_block
-        sram #(
-            .DATA_WIDTH ( DCACHE_LINE_WIDTH                 ),
-            .NUM_WORDS  ( DCACHE_NUM_WORDS                  )
-        ) data_sram (
-            .req_i   ( req_ram [i]                          ),
-            .rst_ni  ( rst_ni                               ),
-            .we_i    ( we_ram                               ),
-            .addr_i  ( addr_ram[DCACHE_INDEX_WIDTH-1:DCACHE_BYTE_OFFSET]  ),
-            .wuser_i ( '0                                   ),
-            .wdata_i ( wdata_ram.data                       ),
-            .be_i    ( be_ram.data                          ),
-            .ruser_o (                                      ),
-            .rdata_o ( rdata_ram[i].data                    ),
-            .*
-        );
+        always_comb begin
+            // Is this cache way SPM owned?
+            if(dcache_spm_ways_i[i]) begin
+                req_ram[i]      = req_spm[i];
+                we_ram[i]       = we_spm;
+                addr_ram[i]     = addr_spm;
+                wdata_ram[i]    = wdata_spm;
+                be_ram[i]       = be_spm;
+
+            // Otherwise the cache accesses it
+            end else begin
+                req_ram[i]      = req_cache[i];
+                we_ram[i]       = we_cache;
+                addr_ram[i]     = addr_cache;
+                wdata_ram[i]    = {wdata_cache.tag, wdata_cache.data};
+                be_ram[i]       = {be_cache.tag, be_cache.data};
+            end
+        end
+
+        // Read data can be forwarded to both
+        assign {rdata_cache[i].tag, rdata_cache[i].data} = rdata_ram[i];
+        assign rdata_spm[i] = rdata_ram[i];
 
         sram #(
-            .DATA_WIDTH ( DCACHE_TAG_WIDTH                  ),
+            .DATA_WIDTH ( DCACHE_TAG_WIDTH + DCACHE_LINE_WIDTH ),
             .NUM_WORDS  ( DCACHE_NUM_WORDS                  )
-        ) tag_sram (
+        ) spm_sram (
             .req_i   ( req_ram [i]                          ),
             .rst_ni  ( rst_ni                               ),
-            .we_i    ( we_ram                               ),
-            .addr_i  ( addr_ram[DCACHE_INDEX_WIDTH-1:DCACHE_BYTE_OFFSET]  ),
+            .we_i    ( we_ram[i]                            ),
+            .addr_i  ( addr_ram[i][DCACHE_INDEX_WIDTH-1:DCACHE_BYTE_OFFSET]  ),
             .wuser_i ( '0                                   ),
-            .wdata_i ( wdata_ram.tag                        ),
-            .be_i    ( be_ram.tag                           ),
+            .wdata_i ( wdata_ram[i]                         ),
+            .be_i    ( be_ram[i]                            ),
             .ruser_o (                                      ),
-            .rdata_o ( rdata_ram[i].tag                     ),
+            .rdata_o ( rdata_ram[i]                         ),
             .*
         );
-
     end
 
     // ----------------
@@ -225,11 +476,15 @@ import std_cache_pkg::*;
     vldrty_t [DCACHE_SET_ASSOC-1:0] dirty_wdata, dirty_rdata;
 
     for (genvar i = 0; i < DCACHE_SET_ASSOC; i++) begin
-      assign dirty_wdata[i]     = '{dirty: wdata_ram.dirty, valid: wdata_ram.valid};
-      assign rdata_ram[i].dirty = dirty_rdata[i].dirty;
-      assign rdata_ram[i].valid = dirty_rdata[i].valid;
-      assign be_valid_dirty_ram[i].valid = be_ram.vldrty[i].valid;
-      assign be_valid_dirty_ram[i].dirty = be_ram.vldrty[i].dirty;
+      // If the way is owned by the SPM it's always clean and not valid
+      assign dirty_wdata[i]     = (dcache_spm_ways_i[i]) ? '{dirty: {DCACHE_SET_ASSOC{1'b0}}, valid: 1'b0}
+                                                         : '{dirty: wdata_cache.dirty, valid: wdata_cache.valid};
+      assign rdata_cache[i].dirty = dirty_rdata[i].dirty;
+      assign rdata_cache[i].valid = dirty_rdata[i].valid;
+
+      // Always write the zeroes of SPM owned ways to the memory array
+      assign be_valid_dirty_ram[i].valid = be_cache.vldrty[i].valid | dcache_spm_ways_i[i];
+      assign be_valid_dirty_ram[i].dirty = be_cache.vldrty[i].dirty | {((DCACHE_LINE_WIDTH+7)/8){dcache_spm_ways_i[i]}};
     end
 
     sram #(
@@ -240,9 +495,9 @@ import std_cache_pkg::*;
     ) valid_dirty_sram (
         .clk_i   ( clk_i                               ),
         .rst_ni  ( rst_ni                              ),
-        .req_i   ( |req_ram                            ),
-        .we_i    ( we_ram                              ),
-        .addr_i  ( addr_ram[DCACHE_INDEX_WIDTH-1:DCACHE_BYTE_OFFSET] ),
+        .req_i   ( |req_cache                            ),
+        .we_i    ( we_cache                              ),
+        .addr_i  ( addr_cache[DCACHE_INDEX_WIDTH-1:DCACHE_BYTE_OFFSET] ),
         .wuser_i ( '0                                  ),
         .wdata_i ( dirty_wdata                         ),
         .be_i    ( be_valid_dirty_ram                  ),
@@ -268,12 +523,12 @@ import std_cache_pkg::*;
         .tag_i              ( tag         ),
         .hit_way_o          ( hit_way     ),
 
-        .req_o              ( req_ram     ),
-        .addr_o             ( addr_ram    ),
-        .wdata_o            ( wdata_ram   ),
-        .we_o               ( we_ram      ),
-        .be_o               ( be_ram      ),
-        .rdata_i            ( rdata_ram   ),
+        .req_o              ( req_cache   ),
+        .addr_o             ( addr_cache  ),
+        .wdata_o            ( wdata_cache ),
+        .we_o               ( we_cache    ),
+        .be_o               ( be_cache    ),
+        .rdata_i            ( rdata_cache ),
         .*
     );
 

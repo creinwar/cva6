@@ -49,6 +49,7 @@ module std_cache_subsystem import ariane_pkg::*; import std_cache_pkg::*; #(
     // Cache management
     input  logic                           dcache_enable_i,        // from CSR
     input  logic                           dcache_flush_i,         // high until acknowledged
+    input  [ariane_pkg::DCACHE_SET_ASSOC-1:0]   dcache_spm_ways_i,
     output logic                           dcache_flush_ack_o,     // send a single cycle acknowledge signal when the cache is flushed
     output logic                           dcache_miss_o,          // we missed on a ld/st
     output logic                           wbuffer_empty_o,        // statically set to 1, as there is no wbuffer in this cache system
@@ -114,6 +115,7 @@ module std_cache_subsystem import ariane_pkg::*; import std_cache_pkg::*; #(
       .clk_i,
       .rst_ni,
       .enable_i     ( dcache_enable_i        ),
+      .dcache_spm_ways_i,
       .flush_i      ( dcache_flush_i         ),
       .flush_ack_o  ( dcache_flush_ack_o     ),
       .miss_o       ( dcache_miss_o          ),

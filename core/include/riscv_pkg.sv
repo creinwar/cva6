@@ -625,6 +625,7 @@ package riscv;
         CSR_TLB_LOCK_PTE_8 = 12'h5D8,
         CSR_TLB_LOCK_VPN_8 = 12'h5D9,
         CSR_TLB_LOCK_ID_8  = 12'h5DA,
+        CSR_DCACHE_SPM_WAYS = 12'h5E0,
         // Cache Control (platform specifc)
         CSR_DCACHE         = 12'h701,
         CSR_ICACHE         = 12'h700,
