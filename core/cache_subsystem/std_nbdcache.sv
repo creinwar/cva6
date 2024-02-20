@@ -38,6 +38,8 @@ module std_nbdcache import std_cache_pkg::*; import ariane_pkg::*; #(
     // Request ports
     input  dcache_req_i_t [2:0]            req_ports_i,  // request ports
     output dcache_req_o_t [2:0]            req_ports_o,  // request ports
+    input  dcache_req_o_t                  ispm_req_i,
+    output dcache_req_i_t                  ispm_req_o,
     // Cache AXI refill port
     output axi_req_t                       axi_data_o,
     input  axi_rsp_t                       axi_data_i,
@@ -118,8 +120,8 @@ import std_cache_pkg::*;
         WRITE
     } addr_decode_state_t;
 
-    dcache_req_i_t [2:0]    cache_ports_in, spm_ports_in;
-    dcache_req_o_t [2:0]    cache_ports_out, spm_ports_out;
+    dcache_req_i_t [2:0]    cache_ports_in, dspm_ports_in, ispm_ports_out;
+    dcache_req_o_t [2:0]    cache_ports_out, dspm_ports_out, ispm_ports_in;
 
     // Debugging - if all cache ways are seeing a request, we want only reads
     logic multi_cache_write;
@@ -129,31 +131,117 @@ import std_cache_pkg::*;
     // ------------------
     // Cache vs. SPM split
     // ------------------
+
+    typedef logic [riscv::PLEN-1:0] paddr_t;
+
+    typedef enum logic [1:0] {
+        CACHE_REQ = 2'h0,
+        DSPM_REQ  = 2'h1,
+        ISPM_REQ  = 2'h2,
+        INVALID_REQ
+    } req_dest_t;
+
+    typedef struct packed {
+        logic [1:0]     idx;
+        paddr_t         start_addr;
+        paddr_t         end_addr;
+    } rule_t;
+
+    rule_t [3:0] dcache_spm_map = {
+        {CACHE_REQ, 56'h0, ArianeCfg.DCacheSpmAddrBase},
+        {DSPM_REQ, ArianeCfg.DCacheSpmAddrBase, (ArianeCfg.DCacheSpmAddrBase + ArianeCfg.DCacheSpmLength)},
+        {ISPM_REQ, ArianeCfg.ICacheSpmAddrBase, (ArianeCfg.ICacheSpmAddrBase + ArianeCfg.ICacheSpmLength)},
+        {CACHE_REQ, (ArianeCfg.ICacheSpmAddrBase + ArianeCfg.ICacheSpmLength), 56'h0}
+    };
+
+    // This uses 2'b11 as "no current request" state
+    logic [1:0] ispm_port_next, ispm_port_d, ispm_port_q;
+
+    // I-cache spm arbitration
+    always_comb begin
+        ispm_port_d     = ispm_port_q;
+        ispm_port_next  = 2'b11;
+
+        ispm_req_o      = '{default: 0};
+        ispm_ports_in   = '{default: 0};
+
+        for(int unsigned i = 0; i < 3; i++) begin
+            if(ispm_ports_out[i].data_req) begin
+                ispm_port_next = 2'(i);
+                break;
+            end
+        end
+
+        // Not serving a request => take the next one
+        if(ispm_port_q == 2'b11) begin
+            if(!(&ispm_port_next)) begin
+                ispm_port_d = ispm_port_next;
+
+                ispm_req_o = ispm_ports_out[ispm_port_next];
+                ispm_ports_in[ispm_port_next] = ispm_req_i;
+            end
+
+        // We're still serving a request so wait for it
+        // to complete
+        end else begin
+            ispm_req_o = ispm_ports_out[ispm_port_q];
+            ispm_ports_in[ispm_port_q] = ispm_req_i;
+
+            if(ispm_ports_in[ispm_port_q].data_rvalid || ispm_ports_in[ispm_port_q].data_gnt) begin
+                ispm_port_d = 2'b11;
+            end
+        end
+    end
+    `FF(ispm_port_q, ispm_port_d, 2'b11, clk_i, rst_ni)
+
     generate
         for (genvar i = 0; i < 3; i++) begin: address_decode
 
             addr_decode_state_t adec_state_d, adec_state_q;
             logic [DCACHE_INDEX_WIDTH-1:0] addr_idx_d, addr_idx_q;
             logic [DCACHE_TAG_WIDTH-1:0] addr_tag_d, addr_tag_q;
-            logic spm_req_d, spm_req_q;
+            req_dest_t req_dest_d, req_dest_q;
+
+            logic [1:0] cur_idx;
+
+            addr_decode #(
+                .NoIndices  ( 3         ),
+                .NoRules    ( 4         ),
+                .addr_t     ( paddr_t   ),
+                .rule_t     ( rule_t    ),
+                .Napot      ( 0         )
+            ) i_addr_dec (
+                .addr_i             ( {req_ports_i[i].address_tag, {DCACHE_INDEX_WIDTH{1'b0}}}  ),
+                .addr_map_i         ( dcache_spm_map    ),
+                .idx_o              ( cur_idx           ),
+                .dec_valid_o        (                   ),
+                .dec_error_o        (                   ),
+                .en_default_idx_i   ( 1'b1              ),
+                .default_idx_i      ( '0                )
+            );
 
             always_comb begin
                 addr_idx_d      = addr_idx_q;
                 addr_tag_d      = addr_tag_q;
                 adec_state_d    = adec_state_q;
-                spm_req_d       = spm_req_q;
+                req_dest_d      = req_dest_q;
 
                 // By default we forward all communication to
-                // both targets, minus the ready/valid signals
-                spm_ports_in[i]             = req_ports_i[i];
-                spm_ports_in[i].data_req    = 1'b0;
-                spm_ports_in[i].tag_valid   = 1'b0;
-                spm_ports_in[i].kill_req    = 1'b0;
-
+                // all targets, minus the ready/valid signals
                 cache_ports_in[i]           = req_ports_i[i];
                 cache_ports_in[i].data_req  = 1'b0;
                 cache_ports_in[i].tag_valid = 1'b0;
                 cache_ports_in[i].kill_req  = 1'b0;
+
+                dspm_ports_in[i]            = req_ports_i[i];
+                dspm_ports_in[i].data_req   = 1'b0;
+                dspm_ports_in[i].tag_valid  = 1'b0;
+                dspm_ports_in[i].kill_req   = 1'b0;
+
+                ispm_ports_out[i]           = req_ports_i[i];
+                ispm_ports_out[i].data_req  = 1'b0;
+                ispm_ports_out[i].tag_valid = 1'b0;
+                ispm_ports_out[i].kill_req  = 1'b0;
 
                 // As the answer will most likely come from the
                 // cache we forward that by default, also without ready/valid
@@ -163,7 +251,7 @@ import std_cache_pkg::*;
 
                 unique case (adec_state_q)
                     IDLE: begin
-                        spm_req_d = 1'b0;
+                        req_dest_d = CACHE_REQ;
 
                         if (req_ports_i[i].data_req) begin
                             addr_idx_d = req_ports_i[i].address_index;
@@ -171,19 +259,29 @@ import std_cache_pkg::*;
                             if(req_ports_i[i].data_we) begin
                                 adec_state_d = WRITE;
 
-                                spm_req_d = &req_ports_i[i].address_tag[DCACHE_TAG_WIDTH-1 -: 36];
+                                req_dest_d = req_dest_t'(cur_idx);
 
-                                if(spm_req_d) begin
+                                unique case (req_dest_q)
+                                    CACHE_REQ: begin
+                                        cache_ports_in[i] = req_ports_i[i];
+                                        req_ports_o[i] = cache_ports_out[i];
+                                    end
 
-                                    spm_ports_in[i] = req_ports_i[i];
-                                    req_ports_o[i] = spm_ports_out[i];
+                                    DSPM_REQ: begin
+                                        dspm_ports_in[i] = req_ports_i[i];
+                                        req_ports_o[i] = dspm_ports_out[i];
+                                    end
 
-                                end else begin
+                                    ISPM_REQ: begin
+                                        ispm_ports_out[i] = req_ports_i[i];
+                                        req_ports_o[i] = ispm_ports_in[i];
+                                    end
 
-                                    cache_ports_in[i] = req_ports_i[i];
-                                    req_ports_o[i] = cache_ports_out[i];
-
-                                end
+                                    default: begin
+                                        cache_ports_in[i] = req_ports_i[i];
+                                        req_ports_o[i] = cache_ports_out[i];
+                                    end
+                                endcase
 
                                 // If the write could be acknowledged already
                                 // we stay in the idle state
@@ -207,21 +305,30 @@ import std_cache_pkg::*;
                         req_ports_o[i] = cache_ports_out[i];
 
                         if (req_ports_i[i].tag_valid) begin
-                            spm_req_d = &req_ports_i[i].address_tag[DCACHE_TAG_WIDTH-1 -: 36];
+                            req_dest_d = req_dest_t'(cur_idx);
 
-                            if(spm_req_d) begin
+                            if(req_dest_d != CACHE_REQ) begin
                                 adec_state_d = WAIT_SPM;
 
                                 addr_tag_d = req_ports_i[i].address_tag;
 
-                                spm_ports_in[i] = req_ports_i[i];
-                                req_ports_o[i] = spm_ports_out[i];
+                                if(req_dest_d == DSPM_REQ) begin
+                                    dspm_ports_in[i]    = req_ports_i[i];
+                                    req_ports_o[i]      = dspm_ports_out[i];
 
-                                spm_ports_in[i].address_index = addr_idx_q;
+                                    dspm_ports_in[i].address_index  = addr_idx_q;
 
-                                // All reads have been granted by the cache before,
-                                // this is just to signal a pending request to the SPM controller
-                                spm_ports_in[i].data_req = 1'b1;
+                                    // All reads have been granted by the cache before,
+                                    // this is just to signal a pending request to the SPM controller
+                                    dspm_ports_in[i].data_req       = 1'b1;
+
+                                end else begin
+                                    ispm_ports_out[i]   = req_ports_i[i];
+                                    req_ports_o[i]      = ispm_ports_in[i];
+
+                                    ispm_ports_out[i].address_index = addr_idx_q;
+                                    ispm_ports_out[i].data_req      = 1'b1;
+                                end
 
                                 // Kill the started cache request as this is a SPM access
                                 cache_ports_in[i].kill_req = 1'b1;
@@ -237,7 +344,11 @@ import std_cache_pkg::*;
                                 adec_state_d = IDLE;
                             end
 
+                            // Speculative grants are only handed out to reads so we can
+                            // just re-enter the WAIT_TAG state while recording the new
+                            // index
                             if(req_ports_o[i].data_gnt) begin
+                                addr_idx_d = req_ports_i[i].address_index;
                                 adec_state_d = WAIT_TAG;
                             end
                         end
@@ -260,8 +371,27 @@ import std_cache_pkg::*;
 
                     WAIT_SPM: begin
 
-                        spm_ports_in[i] = req_ports_i[i];
-                        req_ports_o[i] = spm_ports_out[i];
+                        if(req_dest_q == DSPM_REQ) begin
+                            dspm_ports_in[i]    = req_ports_i[i];
+                            req_ports_o[i]      = dspm_ports_out[i];
+
+                            dspm_ports_in[i].address_index  = addr_idx_q;
+                            dspm_ports_in[i].address_tag    = addr_tag_q;
+
+                            // All reads have been granted by the cache before,
+                            // this is just to signal a pending request to the SPM controller
+                            dspm_ports_in[i].data_req = 1'b1;
+
+                        // If we end up here it has to be an ISPM request
+                        end else begin
+                            ispm_ports_out[i]   = req_ports_i[i];
+                            req_ports_o[i]      = ispm_ports_in[i];
+
+                            ispm_ports_out[i].address_index = addr_idx_q;
+                            ispm_ports_out[i].address_tag   = addr_tag_q;
+                            ispm_ports_out[i].data_req      = 1'b1;
+                        end
+
 
                         if(req_ports_o[i].data_rvalid) begin
                             adec_state_d = IDLE;
@@ -269,21 +399,32 @@ import std_cache_pkg::*;
                     end
 
                     WRITE: begin
-                        if(spm_req_q) begin
 
-                            spm_ports_in[i] = req_ports_i[i];
-                            req_ports_o[i] = spm_ports_out[i];
+                        unique case (req_dest_q)
+                            CACHE_REQ: begin
+                                cache_ports_in[i] = req_ports_i[i];
+                                req_ports_o[i] = cache_ports_out[i];
+                            end
 
-                        end else begin
+                            DSPM_REQ: begin
+                                dspm_ports_in[i] = req_ports_i[i];
+                                req_ports_o[i] = dspm_ports_out[i];
+                            end
 
-                            cache_ports_in[i] = req_ports_i[i];
-                            req_ports_o[i] = cache_ports_out[i];
+                            ISPM_REQ: begin
+                                ispm_ports_out[i] = req_ports_i[i];
+                                req_ports_o[i] = ispm_ports_in[i];
+                            end
 
-                        end
+                            default: begin
+                                cache_ports_in[i] = req_ports_i[i];
+                                req_ports_o[i] = cache_ports_out[i];
+                            end
+                        endcase
 
                         if(req_ports_o[i].data_gnt) begin
                             adec_state_d = IDLE;
-                            spm_req_d = 0;
+                            req_dest_d = CACHE_REQ;
                         end
                     end
 
@@ -302,7 +443,7 @@ import std_cache_pkg::*;
             `FF(addr_idx_q, addr_idx_d, '0, clk_i, rst_ni)
             `FF(addr_tag_q, addr_tag_d, '0, clk_i, rst_ni)
             `FF(adec_state_q, adec_state_d, IDLE, clk_i, rst_ni)
-            `FF(spm_req_q, spm_req_d, 1'b0, clk_i, rst_ni)
+            `FF(req_dest_q, req_dest_d, CACHE_REQ, clk_i, rst_ni)
 
         end
     endgenerate
@@ -311,7 +452,7 @@ import std_cache_pkg::*;
     // SPM Controller
     // ------------------
 
-    spm_ctrl #(
+    dspm_ctrl #(
         .NR_PORTS       ( 3                                     ),
         .NR_WAYS        ( DCACHE_SET_ASSOC                      ),
         .LINE_WIDTH     ( DCACHE_LINE_WIDTH                     ),
@@ -319,15 +460,15 @@ import std_cache_pkg::*;
         .MEMORY_WIDTH   ( DCACHE_TAG_WIDTH + DCACHE_LINE_WIDTH  ),
         .IDX_WIDTH      ( DCACHE_INDEX_WIDTH                    ),
         .NR_WAIT_STAGES ( 1                                     )
-    ) i_spm_ctrl (
+    ) i_dspm_ctrl (
         .clk_i,
         .rst_ni,
 
         .active_ways_i      ( dcache_spm_ways_i ),
 
         // Request ports
-        .spm_req_ports_i    ( spm_ports_in  ),
-        .spm_req_ports_o    ( spm_ports_out ),
+        .spm_req_ports_i    ( dspm_ports_in     ),
+        .spm_req_ports_o    ( dspm_ports_out    ),
 
         .req_o              ( req_spm       ),
         .addr_o             ( addr_spm      ),

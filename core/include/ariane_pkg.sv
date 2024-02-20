@@ -49,6 +49,10 @@ package ariane_pkg;
       // cache config
       bit                               AxiCompliant;          // set to 1 when using in conjunction with 64bit AXI bus adapter
       bit                               SwapEndianess;         // set to 1 to swap endianess inside L1.5 openpiton adapter
+      logic [55:0]                      DCacheSpmAddrBase;     // base address of the DCache SPM (if enabled)
+      logic [55:0]                      DCacheSpmLength;       // length of the reserved address space
+      logic [55:0]                      ICacheSpmAddrBase;     // base address of the ICache SPM (if enabled)
+      logic [55:0]                      ICacheSpmLength;       // length of the reserved address space
       // CLIC
       int unsigned                      CLICNumInterruptSrc;   // number of interrupt signals from the CLIC
       int unsigned                      CLICIntCtlBits;        // TODO(@niwis,@alex96295): specify
@@ -66,9 +70,9 @@ package ariane_pkg;
       NonIdempotentAddrBase: 1024'({64'b0, 64'b0}),
       NonIdempotentLength:   1024'({64'b0, 64'b0}),
       NrExecuteRegionRules:  unsigned'(3),
-      //                      DRAM,          Boot ROM,   Debug Module
-      ExecuteRegionAddrBase: 1024'({64'h8000_0000, 64'h1_0000, 64'h0}),
-      ExecuteRegionLength:   1024'({64'h40000000,  64'h10000,  64'h1000}),
+      //                      DRAM,    I$ SPM,      Boot ROM,   Debug Module
+      ExecuteRegionAddrBase: 1024'({64'h8000_0000, 64'h1A0_0000, 64'h1_0000, 64'h0}),
+      ExecuteRegionLength:   1024'({64'h40000000,  64'h020_0000, 64'h10000,  64'h1000}),
       // cached region
       NrCachedRegionRules:   unsigned'(1),
       CachedRegionAddrBase:  1024'({64'h8000_0000}),
@@ -79,6 +83,10 @@ package ariane_pkg;
       //  cache config
       AxiCompliant:           1'b1,
       SwapEndianess:          1'b0,
+      DCacheSpmAddrBase:      56'h0180_0000,
+      DCacheSpmLength:        56'h0020_0000,
+      ICacheSpmAddrBase:      56'h01A0_0000,
+      ICacheSpmLength:        56'h0020_0000,
       // debug
       DmBaseAddress:          64'h0,
       NrPMPEntries:           unsigned'(cva6_config_pkg::CVA6ConfigNrPMPEntries)
@@ -94,6 +102,8 @@ package ariane_pkg;
         assert(Cfg.NrNonIdempotentRules <= NrMaxRules);
         assert(Cfg.NrExecuteRegionRules <= NrMaxRules);
         assert(Cfg.NrCachedRegionRules  <= NrMaxRules);
+        assert(Cfg.DCacheSpmLength > 0);
+        assert(Cfg.ICacheSpmLength > 0);
         assert(Cfg.NrPMPEntries <= 16);
       `endif
       // pragma translate_on

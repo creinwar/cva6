@@ -102,6 +102,7 @@ module csr_regfile import ariane_pkg::*; #(
     output logic                  icache_en_o,                // L1 ICache Enable
     output logic                  dcache_en_o,                // L1 DCache Enable
     output logic [ariane_pkg::DCACHE_SET_ASSOC-1:0]         dcache_spm_ways_o,          // Bitmask of ways in SPM mode
+    output logic [ariane_pkg::ICACHE_SET_ASSOC-1:0]         icache_spm_ways_o,          // Bitmask of ways in SPM mode
     // Partitioning
     output logic[ariane_pkg::NUM_COLOURS-1:0]   cur_clrs_o,   // Current allowed colours
     output ariane_pkg::locked_tlb_entry_t [ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] locked_tlb_entries_o,   // Locked TLB entries
@@ -204,11 +205,19 @@ module csr_regfile import ariane_pkg::*; #(
     riscv::xlen_t dcache_spm_ways_q, dcache_spm_ways_d;
     assign dcache_spm_ways_o = dcache_spm_ways_q[ariane_pkg::DCACHE_SET_ASSOC-1:0];
 
+    // ICache ways configured for SPM mode
+    riscv::xlen_t icache_spm_ways_q, icache_spm_ways_d;
+    assign icache_spm_ways_o = icache_spm_ways_q[ariane_pkg::ICACHE_SET_ASSOC-1:0];
+
     logic [31:0] cur_clrs_q,  cur_clrs_d;
     logic [31:0] last_clrs_q, last_clrs_d;
     riscv::pte_t [ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] tlb_lock_pte_q, tlb_lock_pte_d;
     ariane_pkg::tlb_lock_vpn_t [ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] tlb_lock_vpn_q, tlb_lock_vpn_d;
     ariane_pkg::tlb_lock_id_t [ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] tlb_lock_id_q, tlb_lock_id_d;
+
+    // Xvisor context switch indication register
+    riscv::xlen_t ctxt_switch_q, ctxt_switch_d;
+
     riscv::xlen_t dcache_q,    dcache_d;
     riscv::xlen_t icache_q,    icache_d;
     riscv::xlen_t fence_t_pad_q, fence_t_pad_d;
@@ -658,7 +667,10 @@ module csr_regfile import ariane_pkg::*; #(
                 riscv::CSR_TLB_LOCK_VPN_8:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 8 && !v_q) csr_rdata = tlb_lock_vpn_q[7]; else read_access_exception = 1'b1;
                 riscv::CSR_TLB_LOCK_ID_8:    if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 8 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[7]}; else read_access_exception = 1'b1;
 
+                riscv::CSR_SCHED_DEBG:       csr_rdata = ctxt_switch_q;
+
                 riscv::CSR_DCACHE_SPM_WAYS:     if(!v_q) csr_rdata = dcache_spm_ways_q; else read_access_exception = 1'b1;
+                riscv::CSR_ICACHE_SPM_WAYS:     if(!v_q) csr_rdata = icache_spm_ways_q; else read_access_exception = 1'b1;
 
                 // custom (non RISC-V) cache control
                 riscv::CSR_DCACHE:           csr_rdata = dcache_q;
@@ -796,7 +808,9 @@ module csr_regfile import ariane_pkg::*; #(
         tlb_lock_pte_d          = tlb_lock_pte_q;
         tlb_lock_vpn_d          = tlb_lock_vpn_q;
         tlb_lock_id_d           = tlb_lock_id_q;
+        ctxt_switch_d           = ctxt_switch_q;
         dcache_spm_ways_d       = dcache_spm_ways_q;
+        icache_spm_ways_d       = icache_spm_ways_q;
         dcache_d                = dcache_q;
         icache_d                = icache_q;
         fence_t_pad_d           = fence_t_pad_q;
@@ -1460,7 +1474,11 @@ module csr_regfile import ariane_pkg::*; #(
                 riscv::CSR_TLB_LOCK_VPN_8:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 8 && !v_q) tlb_lock_vpn_d[7] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
                 riscv::CSR_TLB_LOCK_ID_8:      if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 8 && !v_q) tlb_lock_id_d[7] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
 
+                riscv::CSR_SCHED_DEBG:         ctxt_switch_d = csr_wdata;
+
                 riscv::CSR_DCACHE_SPM_WAYS:    if(!v_q) dcache_spm_ways_d = csr_wdata & ((2**ariane_pkg::DCACHE_SET_ASSOC) - 1); else update_access_exception = 1'b1;
+
+                riscv::CSR_ICACHE_SPM_WAYS:    if(!v_q) icache_spm_ways_d = csr_wdata & ((2**ariane_pkg::ICACHE_SET_ASSOC) - 1); else update_access_exception = 1'b1;
 
                 riscv::CSR_DCACHE:             dcache_d    = {{riscv::XLEN-1{1'b0}}, csr_wdata[0]}; // enable bit
                 riscv::CSR_ICACHE:             icache_d    = {{riscv::XLEN-1{1'b0}}, csr_wdata[0]}; // enable bit
@@ -2260,7 +2278,9 @@ module csr_regfile import ariane_pkg::*; #(
             tlb_lock_pte_q         <= '0;
             tlb_lock_vpn_q         <= '0;
             tlb_lock_id_q          <= '0;
+            ctxt_switch_q          <= '0;
             dcache_spm_ways_q      <= '0;
+            icache_spm_ways_q      <= '0;
             dcache_q               <= {{riscv::XLEN-1{1'b0}}, 1'b1};
             icache_q               <= {{riscv::XLEN-1{1'b0}}, 1'b1};
             fence_t_pad_q          <= {riscv::XLEN{1'b0}};
@@ -2340,7 +2360,9 @@ module csr_regfile import ariane_pkg::*; #(
             tlb_lock_pte_q         <= tlb_lock_pte_d;
             tlb_lock_vpn_q         <= tlb_lock_vpn_d;
             tlb_lock_id_q          <= tlb_lock_id_d;
+            ctxt_switch_q          <= ctxt_switch_d;
             dcache_spm_ways_q      <= dcache_spm_ways_d;
+            icache_spm_ways_q      <= icache_spm_ways_d;
             dcache_q               <= dcache_d;
             icache_q               <= icache_d;
             fence_t_pad_q          <= fence_t_pad_d;

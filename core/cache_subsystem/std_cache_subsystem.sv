@@ -36,6 +36,7 @@ module std_cache_subsystem import ariane_pkg::*; import std_cache_pkg::*; #(
     input  logic                           icache_en_i,            // enable icache (or bypass e.g: in debug mode)
     input  logic                           icache_flush_i,         // flush the icache, flush and kill have to be asserted together
     output logic                           icache_miss_o,          // to performance counter
+    input  logic [ariane_pkg::ICACHE_SET_ASSOC-1:0] icache_spm_ways_i,
     // address translation requests
     input  icache_areq_i_t                 icache_areq_i,          // to/from frontend
     output icache_areq_o_t                 icache_areq_o,
@@ -70,6 +71,9 @@ module std_cache_subsystem import ariane_pkg::*; import std_cache_pkg::*; #(
     axi_req_t axi_req_data;
     axi_rsp_t axi_resp_data;
 
+    dcache_req_o_t d2i_cache_req_in;
+    dcache_req_i_t d2i_cache_req_out;
+
     logic              icache_busy;
     logic              dcache_busy;
 
@@ -92,10 +96,13 @@ module std_cache_subsystem import ariane_pkg::*; import std_cache_pkg::*; #(
         .busy_o     ( icache_busy           ),
         .stall_i    ( stall_i               ),
         .init_ni    ( init_ni               ),
+        .icache_spm_ways_i,
         .areq_i     ( icache_areq_i         ),
         .areq_o     ( icache_areq_o         ),
         .dreq_i     ( icache_dreq_i         ),
         .dreq_o     ( icache_dreq_o         ),
+        .ispm_req_i ( d2i_cache_req_out     ),
+        .ispm_req_o ( d2i_cache_req_in      ),
         .axi_req_o  ( axi_req_icache        ),
         .axi_resp_i ( axi_resp_icache       )
     );
@@ -128,6 +135,8 @@ module std_cache_subsystem import ariane_pkg::*; import std_cache_pkg::*; #(
       .axi_data_i   ( axi_resp_data          ),
       .req_ports_i  ( dcache_req_ports_i     ),
       .req_ports_o  ( dcache_req_ports_o     ),
+      .ispm_req_i   ( d2i_cache_req_in       ),
+      .ispm_req_o   ( d2i_cache_req_out      ),
       .amo_req_i,
       .amo_resp_o
    );
