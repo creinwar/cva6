@@ -48,13 +48,16 @@ module dspm_ctrl import std_cache_pkg::*; import ariane_pkg::*; #(
     localparam WAY_INDEX_BITS = $clog2(NR_WAYS); 
     logic [WAY_INDEX_BITS-1:0] way_idx, way_idx_d, way_idx_q;
 
-    // one hot encoded
+    // One hot encoded
     logic [$clog2(NR_PORTS)-1:0] portsel, portsel_d, portsel_q;
 
+    // SRAM latency counter
     logic [$clog2(NR_WAIT_STAGES)-1:0] wait_stage_d, wait_stage_q;
     
+    // Helper variable to assemble the full cache-line from parts
     logic [LINE_WIDTH-1:0] write_line;
 
+    // Word offset within the cacheline
     logic [$clog2(LINE_WIDTH/8)-$clog2(riscv::XLEN/8)-1:0] cl_offset, cl_offset_d, cl_offset_q;
 
     // Port selection logic
@@ -86,18 +89,21 @@ module dspm_ctrl import std_cache_pkg::*; import ariane_pkg::*; #(
         wdata_o = '{default: 0};
         we_o    = spm_req_ports_i[portsel].data_we;
 
-        // By default we'll always write the tag (so it's zeroed)
+        // By default we'll always write the tag (so that it's zeroed)
         be_o    = '{default: 0};
         be_o[((MEMORY_WIDTH+7)/8)-1:(LINE_WIDTH/8)] = '{default: 1'b1};
 
+        // This saves which cache way this address targets
         way_idx = spm_req_ports_i[portsel].address_tag[0 +: WAY_INDEX_BITS];
 
         write_line = '{default: 0};
 
-        // Decrease the wait counter if it is not already 0
+        // Decrease the wait counter if it's not already 0
         if(wait_stage_q)
             wait_stage_d = wait_stage_q - ($clog2(NR_WAIT_STAGES)+1)'(1);
 
+        // Accept a new request if one is pending and we're not waiting for
+        // the SRAM anymore
         if (spm_req_ports_i[portsel].data_req && wait_stage_q == '0) begin
             portsel_d = portsel;
             way_idx_d = way_idx;
@@ -108,11 +114,15 @@ module dspm_ctrl import std_cache_pkg::*; import ariane_pkg::*; #(
             cl_offset = spm_req_ports_i[portsel].address_index[$clog2(LINE_WIDTH/8)-1:$clog2(riscv::XLEN/8)];
             cl_offset_d = cl_offset;
 
+            // We assemble the write data unconditionally as the
+            // write is controlled by the write enable
             write_line[(cl_offset * riscv::XLEN) +: riscv::XLEN] = spm_req_ports_i[portsel].data_wdata;
 
             // Are we allowed to use this memory?
             if(active_ways_i[way_idx]) begin
                 req_o[way_idx]  = 1'b1;
+                // This zeros the tag and other status bits,
+                // while writing the payload to the SRAM
                 wdata_o         = {{(MEMORY_WIDTH-LINE_WIDTH){1'b0}}, write_line};
 
                 // Only enable the part of the cacheline that we actually want to update
@@ -123,10 +133,13 @@ module dspm_ctrl import std_cache_pkg::*; import ariane_pkg::*; #(
                 spm_req_ports_o[portsel].data_rdata = 64'hCA11AB1E_BADCAB1E;
                 spm_req_ports_o[portsel].data_gnt = spm_req_ports_i[portsel].data_we;
                 spm_req_ports_o[portsel].data_rvalid = ~spm_req_ports_i[portsel].data_we;
+
+                // We don't need to wait for the memory here, as we did not access any
+                wait_stage_d = '0;
             end
         end
 
-        // Later acknowledge => Use the registered version of the select version
+        // Later acknowledge => Use the registered version of the select signals
         if(wait_stage_q == 32'b1) begin
             spm_req_ports_o[portsel_q].data_gnt = spm_req_ports_i[portsel_q].data_we;
             spm_req_ports_o[portsel_q].data_rvalid = ~spm_req_ports_i[portsel_q].data_we;

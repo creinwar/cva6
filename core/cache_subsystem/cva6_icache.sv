@@ -170,12 +170,14 @@ end else begin : gen_piton_offset
       paddr_t         end_addr;
   } rule_t;
 
+  // The address space map dividing it into ISPM and anything else
   rule_t [2:0] icache_spm_map = {
       {1'b0, 56'h0, ArianeCfg.ICacheSpmAddrBase},
       {1'b1, ArianeCfg.ICacheSpmAddrBase, (ArianeCfg.ICacheSpmAddrBase + ArianeCfg.ICacheSpmLength)},
       {1'b0, (ArianeCfg.ICacheSpmAddrBase + ArianeCfg.ICacheSpmLength), 56'h0}
   };
 
+  // We only need one bit to decide between SPM and not
   logic cur_idx;
 
   addr_decode #(
@@ -301,6 +303,7 @@ end else begin : gen_piton_offset
               // The spm request is killed by default but we want to keep it here
               spm_port_in.kill_s2 = dreq_i.kill_s2;
 
+              // Wait for the spm to finish the request
               if(spm_port_out.valid) begin
                 state_d = IDLE;
 
@@ -439,7 +442,9 @@ end else begin : gen_piton_offset
   assign update_lfsr      = cache_wren & all_ways_valid;
   assign repl_way         = (all_ways_valid) ? rnd_way : inv_way;
   assign repl_way_oh_raw  = icache_way_bin2oh(repl_way);
-  assign repl_way_oh_d    = (cmp_en_q) ? ((repl_way_oh_raw & icache_spm_ways_i) ? icache_spm_ways_i + 1 : repl_way_oh_raw)
+  // If the selected replacement would choose a SPM way we have to patch
+  // it to use the first non-spm way
+  assign repl_way_oh_d    = (cmp_en_q) ? ((repl_way_oh_raw & icache_spm_ways_i) ? ((icache_spm_ways_i + 1) & ~icache_spm_ways_i) : repl_way_oh_raw)
                                        : repl_way_oh_q;
 
   // enable signals for memory arrays
@@ -453,7 +458,7 @@ end else begin : gen_piton_offset
   lzc #(
     .WIDTH ( ICACHE_SET_ASSOC )
   ) i_lzc (
-    .in_i    ( ~(vld_rdata | icache_spm_ways_i) ),
+    .in_i    ( ~(vld_rdata | icache_spm_ways_i) ),  // Simulate SPM ways as valid so they are not replaced
     .cnt_o   ( inv_way        ),
     .empty_o ( all_ways_valid )
   );

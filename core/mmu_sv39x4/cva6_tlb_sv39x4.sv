@@ -94,7 +94,7 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
 
     logic [TLB_ENTRIES-1:0] replacement_allowed;
 
-    int unsigned clr_tlb_ratio = TLB_ENTRIES/ariane_pkg::NUM_COLOURS;
+    localparam clr_tlb_ratio = TLB_ENTRIES/ariane_pkg::NUM_COLOURS;
 
     // Figure out the currently writable TLB ways
     // I.e. the set of non-locked TLB ways which are allowed by our colour set
@@ -474,7 +474,7 @@ module cva6_tlb_sv39x4 import ariane_pkg::*; #(
             tags_q      <= '{default: 0};
             content_q   <= '{default: 0};
             plru_tree_q <= '{default: 0};
-            plru_node_state_q <= plru_node_state_t'('{default: 0});
+            plru_node_state_q <= {(TLB_ENTRIES-1){BOTH}};
         end else begin
             tags_q      <= tags_n;
             content_q   <= content_n;

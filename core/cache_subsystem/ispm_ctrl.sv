@@ -14,7 +14,6 @@
 // --------------
 //
 // Description: Arbitrates access to instruction cache memories in SPM mode
-// Requests from lower index input ports are prioritized
 //
 
 `include "common_cells/registers.svh"
@@ -23,7 +22,7 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
     parameter int unsigned NR_WAYS              = 4,
     parameter int unsigned LINE_WIDTH           = 128,
     parameter int unsigned ADDR_WIDTH           = 64,
-    parameter int unsigned MEMORY_WIDTH         = 172,
+    parameter int unsigned MEMORY_WIDTH         = 173,
     parameter int unsigned IDX_WIDTH            = 12,    // Cache index + byte offset
     parameter int unsigned NR_WAIT_STAGES       = 1
 ) (
@@ -39,7 +38,7 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
     input  logic [riscv::PLEN-1:0]                  icache_phys_addr_i,
     input  logic                                    icache_phys_addr_valid_i,
 
-    // Read/Write port to the LSU
+    // Read/Write port from the LSU
     input  dcache_req_i_t                           spm_rw_req_port_i,
     output dcache_req_o_t                           spm_rw_req_port_o,
 
@@ -89,6 +88,8 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
     assign we_o         = lsu_we;
     assign be_o         = lsu_be;
 
+    // The address into the cache way is the part of the index
+    // that selects the cache line
     assign read_addr = icache_req_port_i.vaddr[$clog2(LINE_WIDTH/8) +: (ICACHE_INDEX_WIDTH - $clog2(LINE_WIDTH/8))];
 
     typedef enum logic {
@@ -113,33 +114,40 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
                     // wants to access the cache way right now
                     busy            = 1'b1;
                     fetch_addr      = {NR_WAYS{read_addr}};
+                     // To save one cycle, we request all memory ways at once
+                     // and forward the correct one, depending on the address
                     fetch_req       = '{default: 1'b1};
                     fetch_state_d   = READ;
                 end
             end
 
             READ: begin
+                // Once we know the physical address we can proceed
                 if(icache_phys_addr_valid_i) begin
                     // Are we allowed to use this memory?
                     if(active_ways_i[fetch_way_idx]) begin
                         icache_req_port_o.data  = rdata_i[fetch_way_idx][(fetch_cl_offset * FETCH_WIDTH) +: FETCH_WIDTH];
                         icache_req_port_o.valid = 1'b1;
                     // Otherwise just respond with 0xFFFFFFFF
-                    // (as 0xbadcab1e is actually a compressed instruction)
+                    // (as 0xbadcab1e is actually a compressed instruction :/ )
                     end else begin
                         icache_req_port_o.data  = 32'hFFFFFFFF;
                         icache_req_port_o.valid = 1'b1;
                     end
 
+                    // If we immediately get another request => service it
                     if(icache_req_port_i.req) begin
                         busy            = 1'b1;
                         fetch_addr      = {NR_WAYS{read_addr}};
                         fetch_req       = '{default: 1'b1};
                         fetch_state_d   = READ;
+                    // Otherwise just go back to idle
                     end else begin
                         fetch_state_d   = IDLE;
                     end
 
+                // If the physical address is not valid yet re-read the memory in every
+                // cycle
                 end else begin
                     busy            = 1'b1;
                     fetch_addr      = {NR_WAYS{read_addr}};
@@ -157,7 +165,7 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
     `FF(fetch_state_q, fetch_state_d, IDLE, clk_i, rst_ni)
 
 
-    // LSU port
+    // LSU port - largely copied from dspm_ctrl.sv
     always_comb begin
         lsu_cl_offset_d     = lsu_cl_offset_q;
         lsu_wait_stage_d    = lsu_wait_stage_q;
@@ -170,7 +178,7 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
         lsu_wdata = '{default: 0};
         lsu_we    = '{default: 0};
 
-        // By default we'll always write the tag (so it's zeroed)
+        // By default we'll always write the tag (so that it's zeroed)
         lsu_be    = {NR_WAYS{{be_tag, {(LINE_WIDTH/8){1'b0}}}}};
 
         write_line = '{default: 0};
@@ -205,6 +213,9 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
                 spm_rw_req_port_o.data_rdata    = 64'hCA11AB1E_BADCAB1E;
                 spm_rw_req_port_o.data_gnt      = spm_rw_req_port_i.data_we;
                 spm_rw_req_port_o.data_rvalid   = ~spm_rw_req_port_i.data_we;
+
+                // We don't need to wait for the memory here, as we did not access any
+                lsu_wait_stage_d = '0;
             end
         end
 

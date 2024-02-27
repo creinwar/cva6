@@ -112,6 +112,7 @@ import std_cache_pkg::*;
     logic miss_handler_busy;
     assign busy_o = |busy | miss_handler_busy;
 
+    // States of the Cache vs. SPM demux
     typedef enum logic [2:0] {
         IDLE = 0,
         WAIT_TAG,
@@ -123,17 +124,13 @@ import std_cache_pkg::*;
     dcache_req_i_t [2:0]    cache_ports_in, dspm_ports_in, ispm_ports_out;
     dcache_req_o_t [2:0]    cache_ports_out, dspm_ports_out, ispm_ports_in;
 
-    // Debugging - if all cache ways are seeing a request, we want only reads
-    logic multi_cache_write;
-    assign multi_cache_write = ((req_ram & ~dcache_spm_ways_i) == ~dcache_spm_ways_i) &  we_cache;
-
-
     // ------------------
     // Cache vs. SPM split
     // ------------------
 
     typedef logic [riscv::PLEN-1:0] paddr_t;
 
+    // Possible request destinations
     typedef enum logic [1:0] {
         CACHE_REQ = 2'h0,
         DSPM_REQ  = 2'h1,
@@ -147,6 +144,10 @@ import std_cache_pkg::*;
         paddr_t         end_addr;
     } rule_t;
 
+    // This defines which address ranges are attributed to the SPMs
+    // Any space between the DSPM and ISPM does not get an extra rule
+    // but is handled by the address decoders default index
+    // (which is set to CACHE)
     rule_t [3:0] dcache_spm_map = {
         {CACHE_REQ, 56'h0, ArianeCfg.DCacheSpmAddrBase},
         {DSPM_REQ, ArianeCfg.DCacheSpmAddrBase, (ArianeCfg.DCacheSpmAddrBase + ArianeCfg.DCacheSpmLength)},
@@ -158,6 +159,7 @@ import std_cache_pkg::*;
     logic [1:0] ispm_port_next, ispm_port_d, ispm_port_q;
 
     // I-cache spm arbitration
+    // This handles which port gets forwarded to the ISPM
     always_comb begin
         ispm_port_d     = ispm_port_q;
         ispm_port_next  = 2'b11;
@@ -165,6 +167,7 @@ import std_cache_pkg::*;
         ispm_req_o      = '{default: 0};
         ispm_ports_in   = '{default: 0};
 
+        // Lower indices are prioritized
         for(int unsigned i = 0; i < 3; i++) begin
             if(ispm_ports_out[i].data_req) begin
                 ispm_port_next = 2'(i);
@@ -194,6 +197,8 @@ import std_cache_pkg::*;
     end
     `FF(ispm_port_q, ispm_port_d, 2'b11, clk_i, rst_ni)
 
+    // Address decoding logic
+    // One for each port
     generate
         for (genvar i = 0; i < 3; i++) begin: address_decode
 
@@ -204,6 +209,8 @@ import std_cache_pkg::*;
 
             logic [1:0] cur_idx;
 
+            // Decode the address (rather, the address tag)
+            // of an incoming request
             addr_decode #(
                 .NoIndices  ( 3         ),
                 .NoRules    ( 4         ),
@@ -217,7 +224,7 @@ import std_cache_pkg::*;
                 .dec_valid_o        (                   ),
                 .dec_error_o        (                   ),
                 .en_default_idx_i   ( 1'b1              ),
-                .default_idx_i      ( '0                )
+                .default_idx_i      ( CACHE_REQ         )
             );
 
             always_comb begin
@@ -227,7 +234,9 @@ import std_cache_pkg::*;
                 req_dest_d      = req_dest_q;
 
                 // By default we forward all communication to
-                // all targets, minus the ready/valid signals
+                // all targets, but without the valid and kill signals
+                // That way fewer muxes/logic levels are needed for
+                // the majority of the signals
                 cache_ports_in[i]           = req_ports_i[i];
                 cache_ports_in[i].data_req  = 1'b0;
                 cache_ports_in[i].tag_valid = 1'b0;
@@ -244,23 +253,32 @@ import std_cache_pkg::*;
                 ispm_ports_out[i].kill_req  = 1'b0;
 
                 // As the answer will most likely come from the
-                // cache we forward that by default, also without ready/valid
+                // cache we forward that by default, also without valid
                 req_ports_o[i]              = cache_ports_out[i];
                 req_ports_o[i].data_gnt     = 1'b0;
                 req_ports_o[i].data_rvalid  = 1'b0;
 
                 unique case (adec_state_q)
                     IDLE: begin
+                        // By default, everything goes to the cache
                         req_dest_d = CACHE_REQ;
 
-                        if (req_ports_i[i].data_req) begin
+                        // If we got a request and are not stalled, process it
+                        if (req_ports_i[i].data_req && !stall_i) begin
+
+                            // Save the address index, as it's usually only valid
+                            // until the request is granted (for a read)
                             addr_idx_d = req_ports_i[i].address_index;
 
+                            // If this is a write, we know both the address index
+                            // and the tag, so we can decide where to forward it to
+                            // immediately
                             if(req_ports_i[i].data_we) begin
                                 adec_state_d = WRITE;
 
                                 req_dest_d = req_dest_t'(cur_idx);
 
+                                // Connect the full signals to the correct port
                                 unique case (req_dest_q)
                                     CACHE_REQ: begin
                                         cache_ports_in[i] = req_ports_i[i];
@@ -289,6 +307,9 @@ import std_cache_pkg::*;
                                     adec_state_d = IDLE;
                                 end
 
+                            // If it's a read on the other hand, we need to wait
+                            // for the tag to be valid to decide. Until then,
+                            // forward it to the cache
                             end else begin
                                 adec_state_d = WAIT_TAG;
 
@@ -304,18 +325,24 @@ import std_cache_pkg::*;
                         cache_ports_in[i] = req_ports_i[i];
                         req_ports_o[i] = cache_ports_out[i];
 
+                        // Once the tag is valid, we can see where this request
+                        // needs to go
                         if (req_ports_i[i].tag_valid) begin
                             req_dest_d = req_dest_t'(cur_idx);
 
+                            // Here we enter if it is NOT a cache request
                             if(req_dest_d != CACHE_REQ) begin
                                 adec_state_d = WAIT_SPM;
 
+                                // Now we can also record the rag
                                 addr_tag_d = req_ports_i[i].address_tag;
 
+                                // Now dispatch the request to the correct SPM
                                 if(req_dest_d == DSPM_REQ) begin
                                     dspm_ports_in[i]    = req_ports_i[i];
                                     req_ports_o[i]      = dspm_ports_out[i];
 
+                                    // Inject the previously recorded index
                                     dspm_ports_in[i].address_index  = addr_idx_q;
 
                                     // All reads have been granted by the cache before,
@@ -333,9 +360,9 @@ import std_cache_pkg::*;
                                 // Kill the started cache request as this is a SPM access
                                 cache_ports_in[i].kill_req = 1'b1;
 
+                            // If it's a normal cache request we just wait it out
                             end else begin
                                 adec_state_d = WAIT_CACHE;
-
                             end
 
                             // If the request could already be answered in this cycle
@@ -354,6 +381,8 @@ import std_cache_pkg::*;
                         end
                     end
 
+                    // This state connects the port with the cache
+                    // and waits for it to finish
                     WAIT_CACHE: begin
 
                         cache_ports_in[i] = req_ports_i[i];
@@ -363,12 +392,15 @@ import std_cache_pkg::*;
                             adec_state_d = IDLE;
                         end
 
+                        // If the next read was already granted, go right
+                        // back to the state that waits for the tag
                         if(req_ports_o[i].data_gnt) begin
                             adec_state_d = WAIT_TAG;
                         end
 
                     end
 
+                    // This state just waits for the SPM(s) to finish
                     WAIT_SPM: begin
 
                         if(req_dest_q == DSPM_REQ) begin
@@ -392,14 +424,15 @@ import std_cache_pkg::*;
                             ispm_ports_out[i].data_req      = 1'b1;
                         end
 
-
+                        // As soon as the read data is valid, we go back to idle
                         if(req_ports_o[i].data_rvalid) begin
                             adec_state_d = IDLE;
                         end
                     end
 
+                    // As the name implies, this state just waits for a write
+                    // to finish
                     WRITE: begin
-
                         unique case (req_dest_q)
                             CACHE_REQ: begin
                                 cache_ports_in[i] = req_ports_i[i];
@@ -424,7 +457,6 @@ import std_cache_pkg::*;
 
                         if(req_ports_o[i].data_gnt) begin
                             adec_state_d = IDLE;
-                            req_dest_d = CACHE_REQ;
                         end
                     end
 
@@ -596,7 +628,7 @@ import std_cache_pkg::*;
         sram #(
             .DATA_WIDTH ( DCACHE_TAG_WIDTH + DCACHE_LINE_WIDTH ),
             .NUM_WORDS  ( DCACHE_NUM_WORDS                  )
-        ) spm_sram (
+        ) i_cachline_sram (
             .req_i   ( req_ram [i]                          ),
             .rst_ni  ( rst_ni                               ),
             .we_i    ( we_ram[i]                            ),
