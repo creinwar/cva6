@@ -127,7 +127,7 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
                     // Are we allowed to use this memory?
                     if(active_ways_i[fetch_way_idx]) begin
                         icache_req_port_o.data  = rdata_i[fetch_way_idx][(fetch_cl_offset * FETCH_WIDTH) +: FETCH_WIDTH];
-                        icache_req_port_o.valid = 1'b1;
+                        icache_req_port_o.valid = 1'b1; // If we've got a kill_s2, this will be handled upstream
                     // Otherwise just respond with 0xFFFFFFFF
                     // (as 0xbadcab1e is actually a compressed instruction :/ )
                     end else begin
@@ -157,9 +157,13 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
             end
         endcase
 
-        // If we get any kill request we unconditionally go back to idle
-        if(icache_req_port_i.kill_s1 || icache_req_port_i.kill_s2)
-            fetch_state_d = IDLE;
+        // If we get a kill request for the current request we go back to idle
+        if(icache_req_port_i.kill_s1) begin
+            busy            = 1'b0;
+            fetch_addr      = '{default: 1'b0};
+            fetch_req       = '{default: 1'b0};
+            fetch_state_d   = IDLE;
+        end
     end
 
     `FF(fetch_state_q, fetch_state_d, IDLE, clk_i, rst_ni)
