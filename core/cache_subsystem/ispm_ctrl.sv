@@ -65,7 +65,7 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
 
     logic [((UNUSABLE_WIDTH+7)/8)-1:0] be_tag;
 
-    logic [ADDR_WIDTH-1:0]                  read_addr;
+    logic [ADDR_WIDTH-1:0]                  read_addr_req, read_addr_phys;
 
     logic [NR_WAYS-1:0]                     fetch_req, lsu_req;
     logic [NR_WAYS-1:0][ADDR_WIDTH-1:0]     fetch_addr, lsu_addr;
@@ -90,7 +90,12 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
 
     // The address into the cache way is the part of the index
     // that selects the cache line
-    assign read_addr = icache_req_port_i.vaddr[$clog2(LINE_WIDTH/8) +: (ICACHE_INDEX_WIDTH - $clog2(LINE_WIDTH/8))];
+    // One version from the request (used in the idle state)
+    assign read_addr_req  = icache_req_port_i.vaddr[$clog2(LINE_WIDTH/8) +: (ICACHE_INDEX_WIDTH - $clog2(LINE_WIDTH/8))];
+
+    // And one taken from the physical address input (as the vaddr in the request
+    // can be changed once the request was acknowledged with ready)
+    assign read_addr_phys = icache_phys_addr_i[$clog2(LINE_WIDTH/8) +: (ICACHE_INDEX_WIDTH - $clog2(LINE_WIDTH/8))];
 
     typedef enum logic {
         IDLE,
@@ -113,7 +118,7 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
                     // This tells the LSU arbiter that the instruction fetch
                     // wants to access the cache way right now
                     busy            = 1'b1;
-                    fetch_addr      = {NR_WAYS{read_addr}};
+                    fetch_addr      = {NR_WAYS{read_addr_req}};
                      // To save one cycle, we request all memory ways at once
                      // and forward the correct one, depending on the address
                     fetch_req       = '{default: 1'b1};
@@ -123,22 +128,24 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
 
             READ: begin
                 // Once we know the physical address we can proceed
-                if(icache_phys_addr_valid_i) begin
+                // Also, if this request is killed, we just output something anyway as it's
+                // killed upstream
+                if(icache_phys_addr_valid_i || icache_req_port_i.kill_s2) begin
                     // Are we allowed to use this memory?
                     if(active_ways_i[fetch_way_idx]) begin
                         icache_req_port_o.data  = rdata_i[fetch_way_idx][(fetch_cl_offset * FETCH_WIDTH) +: FETCH_WIDTH];
                         icache_req_port_o.valid = 1'b1; // If we've got a kill_s2, this will be handled upstream
-                    // Otherwise just respond with 0xFFFFFFFF
+                    // Otherwise just respond with 0x00000000
                     // (as 0xbadcab1e is actually a compressed instruction :/ )
                     end else begin
-                        icache_req_port_o.data  = 32'hFFFFFFFF;
+                        icache_req_port_o.data  = 32'h00000000;
                         icache_req_port_o.valid = 1'b1;
                     end
 
                     // If we immediately get another request => service it
                     if(icache_req_port_i.req) begin
                         busy            = 1'b1;
-                        fetch_addr      = {NR_WAYS{read_addr}};
+                        fetch_addr      = {NR_WAYS{read_addr_req}};
                         fetch_req       = '{default: 1'b1};
                         fetch_state_d   = READ;
                     // Otherwise just go back to idle
@@ -150,7 +157,10 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
                 // cycle
                 end else begin
                     busy            = 1'b1;
-                    fetch_addr      = {NR_WAYS{read_addr}};
+                    // It is valid to use the invalid physical address here as we're only
+                    // interested in the index part, which is provided by the registered
+                    // virtual address - TODO: cleanup with it's own vaddr_i input
+                    fetch_addr      = {NR_WAYS{read_addr_phys}};
                     fetch_req       = '{default: 1'b1};
                     fetch_state_d   = READ;
                 end

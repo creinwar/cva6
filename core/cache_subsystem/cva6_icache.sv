@@ -218,7 +218,13 @@ end else begin : gen_piton_offset
     areq_o.fetch_req = 1'b0;
     dreq_o.valid     = 1'b0;
     mem_data_req_o   = 1'b0;
-    spm_port_in      = '{default: 0};
+    // By default we forward everything except the request signal
+    spm_port_in      = dreq_i;
+    spm_port_in.req  = 1'b0;
+    // And we always kill the previous request, if we don't want to
+    // explicitely keep it
+    spm_port_in.kill_s2 = 1'b1;
+
     // performance counter
     miss_o           = 1'b0;
 
@@ -290,9 +296,6 @@ end else begin : gen_piton_offset
           // - a request to idempotent memory, OR
           // - a request to the I-SPM
           if (areq_i.fetch_valid && (!dreq_i.spec || !addr_ni || cur_idx)) begin
-            // By default we kill the spm request here
-            spm_port_in.kill_s2 = 1'b1;
-
             // check if we have to flush
             if (flush_d) begin
               state_d  = IDLE;
@@ -304,6 +307,8 @@ end else begin : gen_piton_offset
               spm_port_in.kill_s2 = dreq_i.kill_s2;
 
               // Wait for the spm to finish the request
+              // This valid is not masked by kill_s2 as it also serves as
+              // a "ready" indication to this FSM
               if(spm_port_out.valid) begin
                 state_d = IDLE;
 
