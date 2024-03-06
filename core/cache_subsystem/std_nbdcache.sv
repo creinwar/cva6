@@ -148,7 +148,8 @@ import std_cache_pkg::*;
     // Any space between the DSPM and ISPM does not get an extra rule
     // but is handled by the address decoders default index
     // (which is set to CACHE)
-    rule_t [3:0] dcache_spm_map = {
+    rule_t [3:0] dcache_spm_map;
+    assign dcache_spm_map = {
         {CACHE_REQ, 56'h0, ArianeCfg.DCacheSpmAddrBase},
         {DSPM_REQ, ArianeCfg.DCacheSpmAddrBase, (ArianeCfg.DCacheSpmAddrBase + ArianeCfg.DCacheSpmLength)},
         {ISPM_REQ, ArianeCfg.ICacheSpmAddrBase, (ArianeCfg.ICacheSpmAddrBase + ArianeCfg.ICacheSpmLength)},

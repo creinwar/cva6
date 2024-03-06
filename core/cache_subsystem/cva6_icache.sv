@@ -171,7 +171,8 @@ end else begin : gen_piton_offset
   } rule_t;
 
   // The address space map dividing it into ISPM and anything else
-  rule_t [2:0] icache_spm_map = {
+  rule_t [2:0] icache_spm_map;
+  assign icache_spm_map = {
       {1'b0, 56'h0, ArianeCfg.ICacheSpmAddrBase},
       {1'b1, ArianeCfg.ICacheSpmAddrBase, (ArianeCfg.ICacheSpmAddrBase + ArianeCfg.ICacheSpmLength)},
       {1'b0, (ArianeCfg.ICacheSpmAddrBase + ArianeCfg.ICacheSpmLength), 56'h0}
@@ -195,7 +196,6 @@ end else begin : gen_piton_offset
       .en_default_idx_i   ( 1'b1                ),
       .default_idx_i      ( '0                  )
   );
-
 
 ///////////////////////////////////////////////////////
 // main control logic
@@ -576,11 +576,7 @@ end else begin : gen_piton_offset
         ram_wdata[i]  = spm_wdata[i];
         ram_be[i]     = spm_be[i];
 
-        spm_rdata[i]  = ram_rdata[i];
-
-        cl_rdata[i]     = '{default: 1'b0};
-        cl_tag_rdata[i] = '{default: 1'b0};
-        vld_rdata[i]    = 1'b0;
+        vld_rdata[i]  = 1'b0;
       end else begin
         ram_req[i]    = cl_req[i] | vld_req[i];
         ram_we[i]     = cl_we | vld_we;
@@ -588,12 +584,15 @@ end else begin : gen_piton_offset
         ram_wdata[i]  = {{vld_wdata[i], cl_tag_q}, mem_rtrn_i.data};
         ram_be[i]     = {{((ICACHE_TAG_WIDTH+1+7)/8){vld_we}}, {(ICACHE_LINE_WIDTH/8){cl_we}}};
 
-        spm_rdata[i]  = '{default: 1'b0};
-
-        cl_rdata[i]     = ram_rdata[i];
-        cl_tag_rdata[i] = ram_rdata[i][ICACHE_LINE_WIDTH +: ICACHE_TAG_WIDTH];
-        vld_rdata[i]    = ram_rdata[i][ICACHE_MEMORY_WIDTH-1];
+        vld_rdata[i]  = ram_rdata[i][ICACHE_MEMORY_WIDTH-1];
       end
+
+      // The read data is always forwarded to both the cache and spm controller
+      // to save some multiplexers
+      spm_rdata[i]    = ram_rdata[i];
+      cl_rdata[i]     = ram_rdata[i];
+      cl_tag_rdata[i] = ram_rdata[i][ICACHE_LINE_WIDTH +: ICACHE_TAG_WIDTH];
+
     end
 
     // Cache SRAM
