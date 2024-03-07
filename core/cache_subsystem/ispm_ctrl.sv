@@ -193,6 +193,11 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
 
         spm_rw_req_port_o = '{default: 0};
 
+        write_line = '{default: 0};
+        write_line[(lsu_cl_offset * riscv::XLEN) +: riscv::XLEN] = spm_rw_req_port_i.data_wdata;
+
+        lsu_cl_offset = spm_rw_req_port_i.address_index[$clog2(LINE_WIDTH/8)-1:$clog2(riscv::XLEN/8)];
+
         lsu_req   = '{default: 0};
         lsu_addr  = {NR_WAYS{spm_rw_req_port_i.address_index[$clog2(LINE_WIDTH/8) +: (ICACHE_INDEX_WIDTH - $clog2(LINE_WIDTH/8))]}};
         lsu_wdata = {NR_WAYS{{UNUSABLE_WIDTH{1'b0}}, write_line}};
@@ -200,11 +205,6 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
 
         // By default we'll always write the tag (so that it's zeroed)
         lsu_be    = {NR_WAYS{{be_tag, {(LINE_WIDTH/8){1'b0}}}}};
-
-        write_line = '{default: 0};
-        write_line[(lsu_cl_offset * riscv::XLEN) +: riscv::XLEN] = spm_rw_req_port_i.data_wdata;
-
-        lsu_cl_offset = spm_rw_req_port_i.address_index[$clog2(LINE_WIDTH/8)-1:$clog2(riscv::XLEN/8)];
 
         // Decrease the wait counter if it is not already 0
         if(lsu_wait_stage_q)

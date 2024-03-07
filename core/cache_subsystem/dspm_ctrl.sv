@@ -76,8 +76,6 @@ module dspm_ctrl import std_cache_pkg::*; import ariane_pkg::*; #(
         end
     end
 
-    assign cl_offset = spm_req_ports_i[portsel].address_index[$clog2(LINE_WIDTH/8)-1:$clog2(riscv::XLEN/8)];
-
     always_comb begin
         cl_offset_d     = cl_offset_q;
         portsel_d       = portsel_q;
@@ -85,6 +83,17 @@ module dspm_ctrl import std_cache_pkg::*; import ariane_pkg::*; #(
         way_idx_d       = way_idx_q;
 
         spm_req_ports_o = '{default: 0};
+
+        // This saves which cache way this address targets
+        way_idx = spm_req_ports_i[portsel].address_tag[0 +: WAY_INDEX_BITS];
+
+        // This saves at which offset within a cacheline we are
+        cl_offset = spm_req_ports_i[portsel].address_index[$clog2(LINE_WIDTH/8)-1:$clog2(riscv::XLEN/8)];
+
+        write_line = '{default: 0};
+        // We assemble the write data unconditionally as the
+        // write is controlled by the write enable
+        write_line[(cl_offset * riscv::XLEN) +: riscv::XLEN] = spm_req_ports_i[portsel].data_wdata;
 
         req_o   = '{default: 0};
         addr_o  = spm_req_ports_i[portsel].address_index;
@@ -99,14 +108,6 @@ module dspm_ctrl import std_cache_pkg::*; import ariane_pkg::*; #(
         // Only enable the part of the cacheline that we actually want to update
         be_o[(cl_offset * (riscv::XLEN/8)) +: (riscv::XLEN/8)] = spm_req_ports_i[portsel].data_be;
 
-        // This saves which cache way this address targets
-        way_idx = spm_req_ports_i[portsel].address_tag[0 +: WAY_INDEX_BITS];
-
-        write_line = '{default: 0};
-        // We assemble the write data unconditionally as the
-        // write is controlled by the write enable
-        write_line[(cl_offset * riscv::XLEN) +: riscv::XLEN] = spm_req_ports_i[portsel].data_wdata;
-
         // Decrease the wait counter if it's not already 0
         if(wait_stage_q)
             wait_stage_d = wait_stage_q - ($clog2(NR_WAIT_STAGES)+1)'(1);
@@ -116,12 +117,11 @@ module dspm_ctrl import std_cache_pkg::*; import ariane_pkg::*; #(
         if (spm_req_ports_i[portsel].data_req && wait_stage_q == '0) begin
             portsel_d = portsel;
             way_idx_d = way_idx;
+            // Record the offset
+            cl_offset_d = cl_offset;
 
             // Reset the counter on every new request
             wait_stage_d = NR_WAIT_STAGES;
-
-            // Record the offset
-            cl_offset_d = cl_offset;
 
             // Are we allowed to use this memory?
             if(active_ways_i[way_idx]) begin
