@@ -71,7 +71,7 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
     logic [NR_WAYS-1:0][ADDR_WIDTH-1:0]     fetch_addr, lsu_addr;
     logic [NR_WAYS-1:0][MEMORY_WIDTH-1:0]   lsu_wdata;
     logic [NR_WAYS-1:0]                     lsu_we;
-    logic [NR_WAYS-1:0][((MEMORY_WIDTH + 7)/8)-1:0]       fetch_be, lsu_be;
+    logic [NR_WAYS-1:0][((MEMORY_WIDTH + 7)/8)-1:0] lsu_be;
 
     // Static assignments
     assign fetch_way_idx    = icache_phys_addr_i[ICACHE_INDEX_WIDTH +: WAY_INDEX_BITS];
@@ -80,13 +80,6 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
 
     // We always want to write the tag (i.e. zero it)
     assign be_tag = '{default: 1};
-
-    // The memory interface is the logical or of the fetch_ and lsu_ variants
-    assign req_o        = fetch_req | lsu_req;
-    assign addr_o       = fetch_addr | lsu_addr;
-    assign wdata_o      = lsu_wdata;
-    assign we_o         = lsu_we;
-    assign be_o         = lsu_be;
 
     // The address into the cache way is the part of the index
     // that selects the cache line
@@ -104,13 +97,31 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
 
     fetch_state_t fetch_state_d, fetch_state_q;
 
+
+    // These memory signals are LSU only
+    assign wdata_o      = lsu_wdata;
+    assign we_o         = lsu_we;
+    assign be_o         = lsu_be;
+
+    // The remaining memory interface is muxed according to the busy signal
+    always_comb begin
+        if(busy) begin
+            req_o        = fetch_req;
+            addr_o       = fetch_addr;
+        end else begin
+            req_o        = lsu_req;
+            addr_o       = lsu_addr;
+        end
+    end
+
     // Instruction fetch port
     always_comb begin
         busy                = 1'b0;
-        fetch_addr          = '{default: 1'b0};
+        fetch_addr          = {NR_WAYS{read_addr_req}};
         fetch_req           = '{default: 1'b0};
         fetch_state_d       = fetch_state_q;
         icache_req_port_o   = '{default: 1'b0};
+        icache_req_port_o.data  = rdata_i[fetch_way_idx][(fetch_cl_offset * FETCH_WIDTH) +: FETCH_WIDTH];
 
         unique case(fetch_state_q)
             IDLE: begin
@@ -118,9 +129,8 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
                     // This tells the LSU arbiter that the instruction fetch
                     // wants to access the cache way right now
                     busy            = 1'b1;
-                    fetch_addr      = {NR_WAYS{read_addr_req}};
-                     // To save one cycle, we request all memory ways at once
-                     // and forward the correct one, depending on the address
+                    // To save one cycle, we request all memory ways at once
+                    // and forward the correct one, depending on the address
                     fetch_req       = '{default: 1'b1};
                     fetch_state_d   = READ;
                 end
@@ -133,7 +143,6 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
                 if(icache_phys_addr_valid_i || icache_req_port_i.kill_s2) begin
                     // Are we allowed to use this memory?
                     if(active_ways_i[fetch_way_idx]) begin
-                        icache_req_port_o.data  = rdata_i[fetch_way_idx][(fetch_cl_offset * FETCH_WIDTH) +: FETCH_WIDTH];
                         icache_req_port_o.valid = 1'b1; // If we've got a kill_s2, this will be handled upstream
                     // Otherwise just respond with 0x00000000
                     // (as 0xbadcab1e is actually a compressed instruction :/ )
@@ -145,7 +154,6 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
                     // If we immediately get another request => service it
                     if(icache_req_port_i.req) begin
                         busy            = 1'b1;
-                        fetch_addr      = {NR_WAYS{read_addr_req}};
                         fetch_req       = '{default: 1'b1};
                         fetch_state_d   = READ;
                     // Otherwise just go back to idle
@@ -170,14 +178,12 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
         // If we get a kill request for the current request we go back to idle
         if(icache_req_port_i.kill_s1) begin
             busy            = 1'b0;
-            fetch_addr      = '{default: 1'b0};
             fetch_req       = '{default: 1'b0};
             fetch_state_d   = IDLE;
         end
     end
 
     `FF(fetch_state_q, fetch_state_d, IDLE, clk_i, rst_ni)
-
 
     // LSU port - largely copied from dspm_ctrl.sv
     always_comb begin
@@ -188,14 +194,17 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
         spm_rw_req_port_o = '{default: 0};
 
         lsu_req   = '{default: 0};
-        lsu_addr  = '{default: 0};
-        lsu_wdata = '{default: 0};
-        lsu_we    = '{default: 0};
+        lsu_addr  = {NR_WAYS{spm_rw_req_port_i.address_index[$clog2(LINE_WIDTH/8) +: (ICACHE_INDEX_WIDTH - $clog2(LINE_WIDTH/8))]}};
+        lsu_wdata = {NR_WAYS{{UNUSABLE_WIDTH{1'b0}}, write_line}};
+        lsu_we    = {NR_WAYS{spm_rw_req_port_i.data_we}};
 
         // By default we'll always write the tag (so that it's zeroed)
         lsu_be    = {NR_WAYS{{be_tag, {(LINE_WIDTH/8){1'b0}}}}};
 
         write_line = '{default: 0};
+        write_line[(lsu_cl_offset * riscv::XLEN) +: riscv::XLEN] = spm_rw_req_port_i.data_wdata;
+
+        lsu_cl_offset = spm_rw_req_port_i.address_index[$clog2(LINE_WIDTH/8)-1:$clog2(riscv::XLEN/8)];
 
         // Decrease the wait counter if it is not already 0
         if(lsu_wait_stage_q)
@@ -207,18 +216,12 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
             // Reset the counter on every new request
             lsu_wait_stage_d = NR_WAIT_STAGES;
 
-            lsu_cl_offset = spm_rw_req_port_i.address_index[$clog2(LINE_WIDTH/8)-1:$clog2(riscv::XLEN/8)];
+            // Record the cachline offset
             lsu_cl_offset_d = lsu_cl_offset;
-
-            write_line[(lsu_cl_offset * riscv::XLEN) +: riscv::XLEN] = spm_rw_req_port_i.data_wdata;
 
             // Are we allowed to use this memory?
             if(active_ways_i[lsu_way_idx]) begin
                 lsu_req[lsu_way_idx]        = 1'b1;
-                lsu_addr[lsu_way_idx]       = spm_rw_req_port_i.address_index[$clog2(LINE_WIDTH/8) +: (ICACHE_INDEX_WIDTH - $clog2(LINE_WIDTH/8))];
-                lsu_wdata[lsu_way_idx]      = {{UNUSABLE_WIDTH{1'b0}}, write_line};
-                lsu_we[lsu_way_idx]         = spm_rw_req_port_i.data_we;
-
                 // Only enable the part of the cacheline that we actually want to update
                 lsu_be[lsu_way_idx][(lsu_cl_offset * (riscv::XLEN/8)) +: (riscv::XLEN/8)] = spm_rw_req_port_i.data_be;
 

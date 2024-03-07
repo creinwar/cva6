@@ -76,6 +76,8 @@ module dspm_ctrl import std_cache_pkg::*; import ariane_pkg::*; #(
         end
     end
 
+    assign cl_offset = spm_req_ports_i[portsel].address_index[$clog2(LINE_WIDTH/8)-1:$clog2(riscv::XLEN/8)];
+
     always_comb begin
         cl_offset_d     = cl_offset_q;
         portsel_d       = portsel_q;
@@ -86,17 +88,24 @@ module dspm_ctrl import std_cache_pkg::*; import ariane_pkg::*; #(
 
         req_o   = '{default: 0};
         addr_o  = spm_req_ports_i[portsel].address_index;
-        wdata_o = '{default: 0};
+        // This zeros the tag and other status bits,
+        // while writing the payload to the SRAM
+        wdata_o = {{(MEMORY_WIDTH-LINE_WIDTH){1'b0}}, write_line};
         we_o    = spm_req_ports_i[portsel].data_we;
 
         // By default we'll always write the tag (so that it's zeroed)
         be_o    = '{default: 0};
         be_o[((MEMORY_WIDTH+7)/8)-1:(LINE_WIDTH/8)] = '{default: 1'b1};
+        // Only enable the part of the cacheline that we actually want to update
+        be_o[(cl_offset * (riscv::XLEN/8)) +: (riscv::XLEN/8)] = spm_req_ports_i[portsel].data_be;
 
         // This saves which cache way this address targets
         way_idx = spm_req_ports_i[portsel].address_tag[0 +: WAY_INDEX_BITS];
 
         write_line = '{default: 0};
+        // We assemble the write data unconditionally as the
+        // write is controlled by the write enable
+        write_line[(cl_offset * riscv::XLEN) +: riscv::XLEN] = spm_req_ports_i[portsel].data_wdata;
 
         // Decrease the wait counter if it's not already 0
         if(wait_stage_q)
@@ -111,22 +120,12 @@ module dspm_ctrl import std_cache_pkg::*; import ariane_pkg::*; #(
             // Reset the counter on every new request
             wait_stage_d = NR_WAIT_STAGES;
 
-            cl_offset = spm_req_ports_i[portsel].address_index[$clog2(LINE_WIDTH/8)-1:$clog2(riscv::XLEN/8)];
+            // Record the offset
             cl_offset_d = cl_offset;
-
-            // We assemble the write data unconditionally as the
-            // write is controlled by the write enable
-            write_line[(cl_offset * riscv::XLEN) +: riscv::XLEN] = spm_req_ports_i[portsel].data_wdata;
 
             // Are we allowed to use this memory?
             if(active_ways_i[way_idx]) begin
                 req_o[way_idx]  = 1'b1;
-                // This zeros the tag and other status bits,
-                // while writing the payload to the SRAM
-                wdata_o         = {{(MEMORY_WIDTH-LINE_WIDTH){1'b0}}, write_line};
-
-                // Only enable the part of the cacheline that we actually want to update
-                be_o[(cl_offset * (riscv::XLEN/8)) +: (riscv::XLEN/8)] = spm_req_ports_i[portsel].data_be;
 
             // Otherwise just respond with badcable
             end else begin
