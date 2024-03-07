@@ -76,6 +76,19 @@ module dspm_ctrl import std_cache_pkg::*; import ariane_pkg::*; #(
         end
     end
 
+    // Static assignments
+    // This saves which cache way this address targets
+    assign way_idx = spm_req_ports_i[portsel].address_tag[0 +: WAY_INDEX_BITS];
+    
+    // This saves at which offset within a cacheline we are
+    assign cl_offset = spm_req_ports_i[portsel].address_index[$clog2(LINE_WIDTH/8)-1:$clog2(riscv::XLEN/8)];
+
+    assign addr_o  = spm_req_ports_i[portsel].address_index;
+    // This zeros the tag and other status bits,
+    // while writing the payload to the SRAM
+    assign wdata_o = {{(MEMORY_WIDTH-LINE_WIDTH){1'b0}}, write_line};
+    assign we_o    = spm_req_ports_i[portsel].data_we;
+
     always_comb begin
         cl_offset_d     = cl_offset_q;
         portsel_d       = portsel_q;
@@ -84,23 +97,12 @@ module dspm_ctrl import std_cache_pkg::*; import ariane_pkg::*; #(
 
         spm_req_ports_o = '{default: 0};
 
-        // This saves which cache way this address targets
-        way_idx = spm_req_ports_i[portsel].address_tag[0 +: WAY_INDEX_BITS];
-
-        // This saves at which offset within a cacheline we are
-        cl_offset = spm_req_ports_i[portsel].address_index[$clog2(LINE_WIDTH/8)-1:$clog2(riscv::XLEN/8)];
-
         write_line = '{default: 0};
         // We assemble the write data unconditionally as the
         // write is controlled by the write enable
         write_line[(cl_offset * riscv::XLEN) +: riscv::XLEN] = spm_req_ports_i[portsel].data_wdata;
 
         req_o   = '{default: 0};
-        addr_o  = spm_req_ports_i[portsel].address_index;
-        // This zeros the tag and other status bits,
-        // while writing the payload to the SRAM
-        wdata_o = {{(MEMORY_WIDTH-LINE_WIDTH){1'b0}}, write_line};
-        we_o    = spm_req_ports_i[portsel].data_we;
 
         // By default we'll always write the tag (so that it's zeroed)
         be_o    = '{default: 0};
