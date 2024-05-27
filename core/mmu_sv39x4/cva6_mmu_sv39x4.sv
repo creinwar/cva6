@@ -88,7 +88,10 @@ module cva6_mmu_sv39x4
     output dcache_req_i_t req_port_o,
     // PMP
     input riscv::pmpcfg_t [15:0] pmpcfg_i,
-    input logic [15:0][riscv::PLEN-3:0] pmpaddr_i
+    input logic [15:0][riscv::PLEN-3:0] pmpaddr_i,
+    // Partitioning support
+    input logic [ariane_pkg::NUM_PARTITIONS-1:0] cur_part_i,
+    input ariane_pkg::locked_tlb_entry_t[ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] locked_tlb_entries_i
 );
 
   logic iaccess_err;  // insufficient privilege to access this instruction page
@@ -126,6 +129,8 @@ module cva6_mmu_sv39x4
   logic                           dtlb_lu_hit;
   logic        [riscv::GPLEN-1:0] dtlb_gpaddr;
 
+  // To track where a locked entry belongs
+  ariane_pkg::locked_tlb_entry_t[ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] locked_dtlb_entries, locked_itlb_entries;
 
   // Assignments
   assign itlb_lu_access = icache_areq_i.fetch_req;
@@ -133,6 +138,20 @@ module cva6_mmu_sv39x4
   assign itlb_lu_asid   = v_i ? vs_asid_i : asid_i;
   assign dtlb_lu_asid   = (ld_st_v_i || flush_tlb_vvma_i) ? vs_asid_i : asid_i;
 
+  // Split the incoming locked tlb entries in data/instruction lockings
+  always_comb begin
+      // Filter out instruction entries for the DTLB...
+      for(int unsigned i = 0; i < ariane_pkg::NUM_TLB_LOCK_WAYS; i++) begin
+          locked_dtlb_entries[i] = locked_tlb_entries_i[i];
+          locked_dtlb_entries[i].valid = locked_tlb_entries_i[i].valid & locked_tlb_entries_i[i].data;
+      end
+
+      // ...and data entries for the ITLB
+      for(int unsigned i = 0; i < ariane_pkg::NUM_TLB_LOCK_WAYS; i++) begin
+          locked_itlb_entries[i] = locked_tlb_entries_i[i];
+          locked_itlb_entries[i].valid = locked_tlb_entries_i[i].valid & locked_tlb_entries_i[i].instr;
+      end
+  end
 
   cva6_tlb_sv39x4 #(
       .CVA6Cfg    (CVA6Cfg),
@@ -148,6 +167,8 @@ module cva6_mmu_sv39x4
       .s_st_enbl_i (enable_translation_i),
       .g_st_enbl_i (enable_g_translation_i),
       .v_i         (v_i),
+      .cur_part_i  (cur_part_i),
+      .locked_tlb_entries_i  (locked_itlb_entries),
 
       .update_i(update_ptw_itlb),
 
@@ -182,6 +203,8 @@ module cva6_mmu_sv39x4
       .s_st_enbl_i (en_ld_st_translation_i),
       .g_st_enbl_i (en_ld_st_g_translation_i),
       .v_i         (ld_st_v_i),
+      .cur_part_i  (cur_part_i),
+      .locked_tlb_entries_i  (locked_dtlb_entries),
 
       .update_i(update_ptw_dtlb),
 

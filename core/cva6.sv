@@ -439,6 +439,10 @@ module cva6
   riscv::pmpcfg_t [15:0] pmpcfg;
   logic [15:0][riscv::PLEN-3:0] pmpaddr;
   logic [31:0] mcountinhibit_csr_perf;
+  logic [ariane_pkg::DCACHE_SET_ASSOC-1:0] dcache_spm_ways_csr_cache;
+  logic [ariane_pkg::ICACHE_SET_ASSOC-1:0] icache_spm_ways_csr_cache;
+  logic [ariane_pkg::NUM_PARTITIONS-1:0] cur_part_csr;
+  ariane_pkg::locked_tlb_entry_t[ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] locked_tlb_entries_csr_ex;
   // ----------------------------
   // Performance Counters <-> *
   // ----------------------------
@@ -751,6 +755,8 @@ module cva6
       .rst_ni(rst_uarch_n),
       .debug_mode_i(debug_mode),
       .flush_i(flush_ctrl_ex),
+      .cur_part_i(cur_part_csr),
+      .locked_tlb_entries_i(locked_tlb_entries_csr_ex),
       .rs1_forwarding_i(rs1_forwarding_id_ex),
       .rs2_forwarding_i(rs2_forwarding_id_ex),
       .fu_data_i(fu_data_id_ex),
@@ -982,6 +988,10 @@ module cva6
       .single_step_o           (single_step_csr_commit),
       .dcache_en_o             (dcache_en_csr_nbdcache),
       .icache_en_o             (icache_en_csr),
+      .dcache_spm_ways_o       (dcache_spm_ways_csr_cache),
+      .icache_spm_ways_o       (icache_spm_ways_csr_cache),
+      .cur_part_o              (cur_part_csr),
+      .locked_tlb_entries_o    (locked_tlb_entries_csr_ex),
       .acc_cons_en_o           (acc_cons_en_csr),
       .fence_t_pad_o           (fence_t_pad_csr_ctrl),
       .fence_t_src_sel_o       (fence_t_src_sel_csr_ctrl),
@@ -1248,6 +1258,7 @@ module cva6
         .icache_en_i       (icache_en_csr),
         .icache_flush_i    (icache_flush_ctrl_cache),
         .icache_miss_o     (icache_miss_cache_perf),
+        .icache_spm_ways_i (icache_spm_ways_csr_cache),
         .icache_areq_i     (icache_areq_ex_cache),
         .icache_areq_o     (icache_areq_cache_ex),
         .icache_dreq_i     (icache_dreq_if_cache),
@@ -1256,6 +1267,7 @@ module cva6
         .dcache_enable_i   (dcache_en_csr_nbdcache),
         .dcache_flush_i    (dcache_flush_ctrl_cache),
         .dcache_flush_ack_o(dcache_flush_ack_cache_ctrl),
+        .dcache_spm_ways_i (dcache_spm_ways_csr_cache),
         // to commit stage
         .amo_req_i         (amo_req),
         .amo_resp_o        (amo_resp),

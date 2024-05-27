@@ -60,6 +60,9 @@ package cva6_config_pkg;
 
   localparam CVA6ConfigInstrTlbEntries = 16;
   localparam CVA6ConfigDataTlbEntries = 16;
+  localparam CVA6ConfigLockableTlbEntries = 8;
+
+  localparam CVA6ConfigNumPartitions = 16;
 
   localparam CVA6ConfigRASDepth = 2;
   localparam CVA6ConfigBTBEntries = 32;
@@ -137,13 +140,13 @@ package cva6_config_pkg;
       ),
       NonIdempotentAddrBase: 1024'({64'b0, 64'b0}),
       NonIdempotentLength: 1024'({64'b0, 64'b0}),
-      NrExecuteRegionRules: unsigned'(3),
-      //                      DRAM,          Boot ROM,   Debug Module
+      NrExecuteRegionRules: unsigned'(4),
+      //                      DRAM,    I$ SPM,    Boot ROM,   Debug Module
       ExecuteRegionAddrBase:
       1024'(
-      {64'h8000_0000, 64'h1_0000, 64'h0}
+      {64'h8000_0000, 64'h1A0_0000, 64'h1_0000, 64'h0}
       ),
-      ExecuteRegionLength: 1024'({64'h40000000, 64'h10000, 64'h1000}),
+      ExecuteRegionLength: 1024'({64'h40000000, 64'h20_0000, 64'h10000, 64'h1000}),
       // cached region
       NrCachedRegionRules:
       unsigned'(
@@ -154,7 +157,11 @@ package cva6_config_pkg;
       MaxOutstandingStores: unsigned'(7),
       DebugEn: bit'(1),
       NonIdemPotenceEn: bit'(0),
-      AxiBurstWriteEn: bit'(0)
+      AxiBurstWriteEn: bit'(0),
+      DCacheSpmAddrBase: 56'h0180_0000,
+      DCacheSpmLength:   56'h0020_0000,
+      ICacheSpmAddrBase: 56'h01A0_0000,
+      ICacheSpmLength:   56'h0020_0000
   };
 
 endpackage

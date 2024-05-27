@@ -28,6 +28,10 @@ module load_store_unit
     input logic flush_i,
     // TO_BE_COMPLETED - TO_BE_COMPLETED
     input logic stall_st_pending_i,
+    // Currently active partitions - CSR_REGFILE
+    input logic [ariane_pkg::NUM_PARTITIONS-1:0] cur_part_i,
+    // Data for locked TLB entries - CSR_REGFILE
+    input ariane_pkg::locked_tlb_entry_t[ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] locked_tlb_entries_i,
     // TO_BE_COMPLETED - TO_BE_COMPLETED
     output logic no_st_pending_o,
     // TO_BE_COMPLETED - TO_BE_COMPLETED
@@ -239,6 +243,8 @@ module load_store_unit
         // Hypervisor load/store signals
         .hlvx_inst_i    (mmu_hlvx_inst),
         .hs_ld_st_inst_i(mmu_hs_ld_st_inst),
+        .cur_part_i,
+        .locked_tlb_entries_i,
         .*
     );
   end else if (MMU_PRESENT && (riscv::XLEN == 64)) begin : gen_mmu_sv39

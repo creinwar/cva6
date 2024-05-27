@@ -45,12 +45,16 @@ module cva6_icache
     output logic         busy_o,
     input  logic         stall_i,
     input  logic         init_ni,         // do not init after enabling
+    input  logic [ariane_pkg::ICACHE_SET_ASSOC-1:0] icache_spm_ways_i,
     // address translation requests
     input  icache_areq_t areq_i,
     output icache_arsp_t areq_o,
     // data requests
     input  icache_dreq_t dreq_i,
     output icache_drsp_t dreq_o,
+    // ISPM request from the LSU
+    input  dcache_req_i_t ispm_req_i,
+    output dcache_req_o_t ispm_req_o,
     // refill port
     input  logic         mem_rtrn_vld_i,
     input  icache_rtrn_t mem_rtrn_i,
@@ -85,6 +89,7 @@ module cva6_icache
   logic [$clog2(ICACHE_SET_ASSOC)-1:0] inv_way;  // first non-valid encountered
   logic [$clog2(ICACHE_SET_ASSOC)-1:0] rnd_way;  // random index for replacement
   logic [$clog2(ICACHE_SET_ASSOC)-1:0] repl_way;  // way to replace
+  logic [ICACHE_SET_ASSOC-1:0] repl_way_oh_raw;
   logic [ICACHE_SET_ASSOC-1:0] repl_way_oh_d, repl_way_oh_q;  // way to replace (onehot)
   logic all_ways_valid;  // we need to switch repl strategy since all are valid
 
@@ -110,6 +115,9 @@ module cva6_icache
   logic [ICACHE_SET_ASSOC-1:0] vld_wdata;  // valid bits to write
   logic [ICACHE_SET_ASSOC-1:0] vld_rdata;  // valid bits coming from valid regs
   logic [ICACHE_CL_IDX_WIDTH-1:0] vld_addr;  // valid bit
+
+  icache_dreq_t spm_port_in;
+  icache_drsp_t spm_port_out;
 
   // cpmtroller FSM
   typedef enum logic [2:0] {
@@ -178,6 +186,44 @@ module cva6_icache
   assign inv_d          = inv_en;
 
   ///////////////////////////////////////////////////////
+  // demultiplexing cache/spm logic
+  ///////////////////////////////////////////////////////
+  typedef logic [riscv::PLEN-1:0] paddr_t;
+
+  typedef struct packed {
+      logic           idx;
+      paddr_t         start_addr;
+      paddr_t         end_addr;
+  } rule_t;
+
+  // The address space map dividing it into ISPM and anything else
+  rule_t [2:0] icache_spm_map;
+  assign icache_spm_map = {
+      {1'b0, 56'h0, CVA6Cfg.ICacheSpmAddrBase},
+      {1'b1, CVA6Cfg.ICacheSpmAddrBase, (CVA6Cfg.ICacheSpmAddrBase + CVA6Cfg.ICacheSpmLength)},
+      {1'b0, (CVA6Cfg.ICacheSpmAddrBase + CVA6Cfg.ICacheSpmLength), 56'h0}
+  };
+
+  // We only need one bit to decide between SPM and not
+  logic cur_idx;
+
+  addr_decode #(
+      .NoIndices  ( 2         ),
+      .NoRules    ( 3         ),
+      .addr_t     ( paddr_t   ),
+      .rule_t     ( rule_t    )
+  ) i_addr_dec (
+      .addr_i             ( areq_i.fetch_paddr  ),
+      .addr_map_i         ( icache_spm_map      ),
+      .idx_o              ( cur_idx             ),
+      .dec_valid_o        (                     ),
+      .dec_error_o        (                     ),
+      .en_default_idx_i   ( 1'b1                ),
+      .default_idx_i      ( '0                  )
+  );
+
+
+  ///////////////////////////////////////////////////////
   // main control logic
   ///////////////////////////////////////////////////////
   logic addr_ni;
@@ -200,6 +246,14 @@ module cva6_icache
     areq_o.fetch_req = 1'b0;
     dreq_o.valid = 1'b0;
     mem_data_req_o = 1'b0;
+
+    // By default we forward everything except the request signal
+    spm_port_in      = dreq_i;
+    spm_port_in.req  = 1'b0;
+    // And we always kill the previous request, if we don't want to
+    // explicitely keep it
+    spm_port_in.kill_s2 = 1'b1;
+
     // performance counter
     miss_o = 1'b0;
 
@@ -240,8 +294,11 @@ module cva6_icache
             dreq_o.ready = 1'b1;
             // we have a new request
             if (dreq_i.req) begin
-              cache_rden = 1'b1;
-              state_d    = READ;
+              cache_rden  = 1'b1;
+              
+              // speculatively forward the request to the SPM
+              spm_port_in = dreq_i;
+              state_d     = READ;
             end
           end
           if (dreq_i.kill_s1) begin
@@ -261,12 +318,46 @@ module cva6_icache
         cmp_en_d    = cache_en_q;
         // readout speculatively
         cache_rden  = cache_en_q;
+        spm_port_in = dreq_i;
 
-        if (areq_i.fetch_valid && (!dreq_i.spec || ((CVA6Cfg.NonIdemPotenceEn && !addr_ni) || (!CVA6Cfg.NonIdemPotenceEn)))) begin
+        // Continue if we have the physical address (for the tag) AND
+        // - a non-speculative request, OR
+        // - a request to idempotent memory, OR
+        // - a request to the I-SPM
+        if (areq_i.fetch_valid && (!dreq_i.spec || ((CVA6Cfg.NonIdemPotenceEn && !addr_ni) || (!CVA6Cfg.NonIdemPotenceEn)) || cur_idx)) begin
           // check if we have to flush
           if (flush_d) begin
             state_d = IDLE;
-            // we have a hit or an exception output valid result
+
+          // this is a SPM access
+          end else if (cur_idx) begin
+            dreq_o.valid  = spm_port_out.valid & ~dreq_i.kill_s2;
+
+            // The spm request is killed by default but we want to keep it here
+            spm_port_in.kill_s2 = dreq_i.kill_s2;
+
+            // Wait for the spm to finish the request
+            // This valid is not masked by kill_s2 as it also serves as
+            // a "ready" indication to this FSM
+            if(spm_port_out.valid) begin
+              state_d = IDLE;
+
+              // we can accept another request
+              // and stay here, but only if no inval is coming in
+              // note: we are not expecting ifill return packets here...
+              if (!mem_rtrn_vld_i) begin
+                dreq_o.ready  = 1'b1;
+                if (dreq_i.req) begin
+                  state_d     = READ;
+                end
+              end
+              // if a request is being killed at this stage,
+              // we have to bail out and wait for the address translation to complete
+              if (dreq_i.kill_s1) begin
+                state_d = IDLE;
+              end
+            end
+          // we have a hit or an exception output valid result
           end else if (((|cl_hit && cache_en_q) || areq_i.fetch_exception.valid) && !inv_q) begin
             dreq_o.valid = ~dreq_i.kill_s2;  // just don't output in this case
             state_d      = IDLE;
@@ -384,7 +475,11 @@ module cva6_icache
   // chose random replacement if all are valid
   assign update_lfsr = cache_wren & all_ways_valid;
   assign repl_way = (all_ways_valid) ? rnd_way : inv_way;
-  assign repl_way_oh_d = (cmp_en_q) ? icache_way_bin2oh(repl_way) : repl_way_oh_q;
+  assign repl_way_oh_raw = icache_way_bin2oh(repl_way);
+  // If the selected replacement would choose a SPM way we have to patch
+  // it to use the first non-spm way
+  assign repl_way_oh_d    = (cmp_en_q) ? ((repl_way_oh_raw & icache_spm_ways_i) ? ((icache_spm_ways_i + 1) & ~icache_spm_ways_i) : repl_way_oh_raw)
+                                       : repl_way_oh_q;
 
   // enable signals for memory arrays
   assign cl_req = (cache_rden) ? '1 : (cache_wren) ? repl_way_oh_q : '0;
@@ -395,7 +490,7 @@ module cva6_icache
   lzc #(
       .WIDTH(ICACHE_SET_ASSOC)
   ) i_lzc (
-      .in_i   (~vld_rdata),
+      .in_i   (~(vld_rdata | icache_spm_ways_i)), // Simulate SPM ways as valid so they are not replaced
       .cnt_o  (inv_way),
       .empty_o(all_ways_valid)
   );
@@ -434,7 +529,10 @@ module cva6_icache
   );
 
   always_comb begin
-    if (cmp_en_q) begin
+    if (cur_idx) begin
+      dreq_o.data = spm_port_out.data;
+      dreq_o.user = '0;
+    end else if (cmp_en_q) begin
       dreq_o.data = cl_sel[hit_idx];
       dreq_o.user = cl_user[hit_idx];
     end else begin
@@ -444,13 +542,102 @@ module cva6_icache
   end
 
   ///////////////////////////////////////////////////////
+  // spm memory arbiter
+  ///////////////////////////////////////////////////////
+
+  localparam ICACHE_MEMORY_WIDTH = 1 + ICACHE_TAG_WIDTH + ICACHE_LINE_WIDTH;
+
+  logic [ICACHE_SET_ASSOC-1:0]                                    spm_req;
+  logic [ICACHE_SET_ASSOC-1:0][ICACHE_CL_IDX_WIDTH-1:0]           spm_addr;
+  logic [ICACHE_SET_ASSOC-1:0][ICACHE_MEMORY_WIDTH-1:0]           spm_wdata;
+  logic [ICACHE_SET_ASSOC-1:0][ICACHE_MEMORY_WIDTH-1:0]           spm_rdata;
+  logic [ICACHE_SET_ASSOC-1:0][((ICACHE_MEMORY_WIDTH + 7)/8)-1:0] spm_be;
+  logic [ICACHE_SET_ASSOC-1:0]                                    spm_we;
+
+  ispm_ctrl #(
+      .NR_WAYS        ( ICACHE_SET_ASSOC    ),
+      .LINE_WIDTH     ( ICACHE_LINE_WIDTH   ),
+      .ADDR_WIDTH     ( ICACHE_CL_IDX_WIDTH ),
+      .MEMORY_WIDTH   ( ICACHE_MEMORY_WIDTH ),
+      .IDX_WIDTH      ( ICACHE_INDEX_WIDTH  ),    // Cache index + byte offset
+      .NR_WAIT_STAGES ( 1 )
+  ) i_ispm_ctrl (
+      .clk_i,
+      .rst_ni,
+      .active_ways_i            ( icache_spm_ways_i   ),
+      // Read-only cache port
+      .icache_req_port_i        ( spm_port_in         ),
+      .icache_req_port_o        ( spm_port_out        ),
+      .icache_phys_addr_i       ( {areq_i.fetch_paddr[riscv::PLEN-1:ICACHE_INDEX_WIDTH], vaddr_q[ICACHE_INDEX_WIDTH-1:0]} ),
+      .icache_phys_addr_valid_i ( areq_i.fetch_valid  ),
+      // Read/Write port to the LSU
+      .spm_rw_req_port_i        ( ispm_req_i          ),
+      .spm_rw_req_port_o        ( ispm_req_o          ),
+      .req_o                    ( spm_req             ),
+      .addr_o                   ( spm_addr            ),
+      .wdata_o                  ( spm_wdata           ),
+      .we_o                     ( spm_we              ),
+      .be_o                     ( spm_be              ),
+      .rdata_i                  ( spm_rdata           )
+  );
+
+
+  ///////////////////////////////////////////////////////
   // memory arrays and regs
   ///////////////////////////////////////////////////////
 
-
-  logic [ICACHE_TAG_WIDTH:0] cl_tag_valid_rdata[ICACHE_SET_ASSOC-1:0];
+  logic [ICACHE_SET_ASSOC-1:0]                                    ram_req;
+  logic [ICACHE_SET_ASSOC-1:0][ICACHE_CL_IDX_WIDTH-1:0]           ram_addr;
+  logic [ICACHE_SET_ASSOC-1:0][ICACHE_LINE_WIDTH-1:0]             ram_wdata;
+  logic [ICACHE_SET_ASSOC-1:0][ICACHE_LINE_WIDTH-1:0]             ram_rdata;
+  logic [ICACHE_SET_ASSOC-1:0]                                    ram_tag_req;
+  logic [ICACHE_SET_ASSOC-1:0][ICACHE_CL_IDX_WIDTH-1:0]           ram_tag_addr;
+  logic [ICACHE_SET_ASSOC-1:0][ICACHE_TAG_WIDTH:0]                ram_tag_wdata;
+  logic [ICACHE_SET_ASSOC-1:0][ICACHE_TAG_WIDTH:0]                ram_tag_rdata;
+  logic [ICACHE_SET_ASSOC-1:0][((ICACHE_LINE_WIDTH + 7)/8)-1:0]   ram_be;
+  logic [ICACHE_SET_ASSOC-1:0]                                    ram_we;
+  logic [ICACHE_SET_ASSOC-1:0]                                    ram_tag_we;
 
   for (genvar i = 0; i < ICACHE_SET_ASSOC; i++) begin : gen_sram
+
+    always_comb begin
+      // Is this a SPM way?
+      if(icache_spm_ways_i[i]) begin
+        ram_req[i]       = spm_req[i];
+        ram_we[i]        = spm_we[i];
+        ram_addr[i]      = spm_addr[i];
+        ram_wdata[i]     = spm_wdata[i][ICACHE_LINE_WIDTH-1:0];
+        ram_be[i]        = spm_be[i][((ICACHE_LINE_WIDTH + 7)/8)-1:0];
+
+        ram_tag_req[i]   = 1'b0;
+        ram_tag_we[i]    = 1'b0;
+        ram_tag_addr[i]  = {ICACHE_CL_IDX_WIDTH{1'b0}};
+        ram_tag_wdata[i] = {(ICACHE_TAG_WIDTH+1){1'b0}};
+
+        vld_rdata[i]     = 1'b0;
+      end else begin
+        ram_req[i]       = cl_req[i];
+        ram_we[i]        = cl_we;
+        ram_addr[i]      = cl_index;
+        ram_wdata[i]     = mem_rtrn_i.data;
+        ram_be[i]        = '1;
+
+        ram_tag_req[i]   = vld_req[i];
+        ram_tag_we[i]    = vld_we;
+        ram_tag_addr[i]  = vld_addr;
+        ram_tag_wdata[i] = {vld_wdata[i], cl_tag_q};
+
+        vld_rdata[i]     = ram_tag_rdata[i][ICACHE_TAG_WIDTH];
+      end
+
+      // The read data is always forwarded to both the cache and spm controller
+      // to save some multiplexers
+      spm_rdata[i]    = ram_rdata[i];
+      cl_rdata[i]     = ram_rdata[i];
+      cl_tag_rdata[i] = ram_tag_rdata[i][ICACHE_TAG_WIDTH-1:0];      
+    end
+
+
     // Tag RAM
     sram #(
         // tag + valid bit
@@ -459,20 +646,17 @@ module cva6_icache
     ) tag_sram (
         .clk_i  (clk_i),
         .rst_ni (rst_ni),
-        .req_i  (vld_req[i]),
-        .we_i   (vld_we),
-        .addr_i (vld_addr),
+        .req_i  (ram_tag_req[i]),
+        .we_i   (ram_tag_we[i]),
+        .addr_i (ram_tag_addr[i]),
         // we can always use the saved tag here since it takes a
         // couple of cycle until we write to the cache upon a miss
         .wuser_i('0),
-        .wdata_i({vld_wdata[i], cl_tag_q}),
+        .wdata_i(ram_tag_wdata[i]),
         .be_i   ('1),
         .ruser_o(),
-        .rdata_o(cl_tag_valid_rdata[i])
+        .rdata_o(ram_tag_rdata[i])
     );
-
-    assign cl_tag_rdata[i] = cl_tag_valid_rdata[i][ICACHE_TAG_WIDTH-1:0];
-    assign vld_rdata[i]    = cl_tag_valid_rdata[i][ICACHE_TAG_WIDTH];
 
     // Data RAM
     sram #(
@@ -483,14 +667,14 @@ module cva6_icache
     ) data_sram (
         .clk_i  (clk_i),
         .rst_ni (rst_ni),
-        .req_i  (cl_req[i]),
-        .we_i   (cl_we),
-        .addr_i (cl_index),
+        .req_i  (ram_req[i]),
+        .we_i   (ram_we[i]),
+        .addr_i (ram_addr[i]),
         .wuser_i(mem_rtrn_i.user),
-        .wdata_i(mem_rtrn_i.data),
+        .wdata_i(ram_wdata[i]),
         .be_i   ('1),
         .ruser_o(cl_ruser[i]),
-        .rdata_o(cl_rdata[i])
+        .rdata_o(ram_rdata[i])
     );
   end
 

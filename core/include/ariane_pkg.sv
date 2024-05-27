@@ -752,7 +752,55 @@ package ariane_pkg;
   localparam bit MMU_PRESENT = cva6_config_pkg::CVA6ConfigMmuPresent;
 
   localparam int unsigned INSTR_TLB_ENTRIES = cva6_config_pkg::CVA6ConfigInstrTlbEntries;
-  localparam int unsigned DATA_TLB_ENTRIES = cva6_config_pkg::CVA6ConfigDataTlbEntries;
+  localparam int unsigned DATA_TLB_ENTRIES  = cva6_config_pkg::CVA6ConfigDataTlbEntries;
+  localparam int unsigned NUM_PARTITIONS    = cva6_config_pkg::CVA6ConfigNumPartitions;
+  localparam int unsigned MAX_PARTITIONS    = 32; // Should be enough for now
+
+  localparam int unsigned NUM_TLB_LOCK_WAYS = (INSTR_TLB_ENTRIES >= DATA_TLB_ENTRIES) ?
+                                             ((DATA_TLB_ENTRIES >= cva6_config_pkg::CVA6ConfigLockableTlbEntries) ?
+                                                cva6_config_pkg::CVA6ConfigLockableTlbEntries : DATA_TLB_ENTRIES)
+                                           : ((INSTR_TLB_ENTRIES >= cva6_config_pkg::CVA6ConfigLockableTlbEntries) ?
+                                                cva6_config_pkg::CVA6ConfigLockableTlbEntries : INSTR_TLB_ENTRIES);
+
+  typedef enum logic [1:0] {
+        INVALID   = 2'b00,
+       STD_PAGE   = 2'b01,
+      MEGA_PAGE   = 2'b10,
+      GIGA_PAGE   = 2'b11
+  } pte_entry_size_t;
+
+  typedef struct packed {
+      logic [6:0] padding2;
+      logic [44:0] vpn;
+      logic [4:0] padding1;
+      logic g_st_enbl;
+      logic s_st_enbl;
+      logic data;
+      logic instr;
+      logic virt_mode;
+      pte_entry_size_t size;
+  } tlb_lock_vpn_t;
+
+  typedef struct packed {
+      logic padding;
+      logic [15:0] asid;
+      logic [13:0] vmid;
+      logic valid;
+  } tlb_lock_id_t;
+
+  typedef struct packed {
+      riscv::pte_t leaf_pte;
+      logic [ASID_WIDTH-1:0] asid;
+      logic [VMID_WIDTH-1:0] vmid;
+      logic [44:0] vpn;
+      logic g_st_enbl;
+      logic s_st_enbl;
+      logic data;
+      logic instr;
+      logic virt_mode;
+      pte_entry_size_t size;
+      logic valid;
+  } locked_tlb_entry_t;
 
   // -------------------
   // Performance counter

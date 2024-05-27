@@ -158,6 +158,14 @@ package config_pkg;
     bit                          NonIdemPotenceEn;
     // AXI burst in write
     bit                          AxiBurstWriteEn;
+    // Base address of the DCache SPM
+    logic [55:0]                 DCacheSpmAddrBase;
+    // Length of the reserved DCache SPM region
+    logic [55:0]                 DCacheSpmLength;
+    // Base address of the ICache SPM
+    logic [55:0]                 ICacheSpmAddrBase;
+    // Length of the reserved ICache SPM region
+    logic [55:0]                 ICacheSpmLength;
   } cva6_cfg_t;
 
 
@@ -178,6 +186,8 @@ package config_pkg;
     assert (Cfg.NrExecuteRegionRules <= NrMaxRules);
     assert (Cfg.NrCachedRegionRules <= NrMaxRules);
     assert (Cfg.NrPMPEntries <= 16);
+    assert (Cfg.DCacheSpmLength > 0);
+    assert (Cfg.ICacheSpmLength > 0);
 `endif
     // pragma translate_on
   endfunction

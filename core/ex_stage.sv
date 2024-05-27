@@ -29,6 +29,10 @@ module ex_stage
     input  logic                                                        flush_i,
     // Debug mode is enabled - CSR_REGFILE
     input  logic                                                        debug_mode_i,
+    // Currently active partitions - CSR_REGFILE
+    input  logic                   [ariane_pkg::NUM_PARTITIONS-1:0]     cur_part_i,
+    // Data for locked TLB entries - CSR_REGFILE
+    input  ariane_pkg::locked_tlb_entry_t[ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] locked_tlb_entries_i,
     // rs1 forwarding - ISSUE_STAGE
     input  logic                   [  riscv::VLEN-1:0]                  rs1_forwarding_i,
     // rs2 forwarding - ISSUE_STAGE
@@ -403,6 +407,8 @@ module ex_stage
       .clk_i,
       .rst_ni,
       .flush_i,
+      .cur_part_i,
+      .locked_tlb_entries_i,
       .stall_st_pending_i,
       .no_st_pending_o,
       .fu_data_i             (lsu_data),
