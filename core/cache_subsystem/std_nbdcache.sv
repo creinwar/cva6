@@ -172,22 +172,22 @@ module std_nbdcache
       dcache_spm_map = {
         {CACHE_REQ, 56'h0, CVA6Cfg.DcacheSpmAddrBase},
         {DSPM_REQ, CVA6Cfg.DcacheSpmAddrBase, (CVA6Cfg.DcacheSpmAddrBase + CVA6Cfg.DcacheSpmLength)},
-        {CACHE_REQ, (CVA6Cfg.DcacheSpmAddrBase + CVA6Cfg.DcacheSpmLength), 56'h0},
-        {CACHE_REQ, (CVA6Cfg.DcacheSpmAddrBase + CVA6Cfg.DcacheSpmLength), 56'h0}
+        {CACHE_REQ, (CVA6Cfg.DcacheSpmAddrBase + CVA6Cfg.DcacheSpmLength), (CVA6Cfg.DcacheSpmAddrBase + CVA6Cfg.DcacheSpmLength) + 56'h32},
+        {CACHE_REQ, (CVA6Cfg.DcacheSpmAddrBase + CVA6Cfg.DcacheSpmLength) + 56'h32, 56'h0}
       };
     end else if (CVA6Cfg.IcacheSpmEn) begin
       dcache_spm_map = {
-        {CACHE_REQ, 56'h0, CVA6Cfg.IcacheSpmAddrBase},
-        {CACHE_REQ, 56'h0, CVA6Cfg.IcacheSpmAddrBase},
+        {CACHE_REQ, 56'h0, 56'h32},
+        {CACHE_REQ, 56'h32, CVA6Cfg.IcacheSpmAddrBase},
         {ISPM_REQ, CVA6Cfg.IcacheSpmAddrBase, (CVA6Cfg.IcacheSpmAddrBase + CVA6Cfg.IcacheSpmLength)},
         {CACHE_REQ, (CVA6Cfg.IcacheSpmAddrBase + CVA6Cfg.IcacheSpmLength), 56'h0}
       };
     end else begin
       dcache_spm_map = {
-        {CACHE_REQ, 56'h0, 56'h0},
-        {CACHE_REQ, 56'h0, 56'h0},
-        {CACHE_REQ, 56'h0, 56'h0},
-        {CACHE_REQ, 56'h0, 56'h0}
+        {CACHE_REQ, 56'h0, 56'h32},
+        {CACHE_REQ, 56'h32, 56'h64},
+        {CACHE_REQ, 56'h64, 56'h96},
+        {CACHE_REQ, 56'h96, 56'h0}
       };
     end
   end

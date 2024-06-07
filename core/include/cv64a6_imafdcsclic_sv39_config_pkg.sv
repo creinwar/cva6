@@ -60,6 +60,7 @@ package cva6_config_pkg;
 
   localparam CVA6ConfigInstrTlbEntries = 16;
   localparam CVA6ConfigDataTlbEntries = 16;
+  localparam CVA6ConfigLockableTlbEntries = 8;
 
   localparam CVA6ConfigRASDepth = 2;
   localparam CVA6ConfigBTBEntries = 32;
@@ -154,7 +155,9 @@ package cva6_config_pkg;
       MaxOutstandingStores: unsigned'(7),
       DebugEn: bit'(1),
       NonIdemPotenceEn: bit'(0),
-      AxiBurstWriteEn: bit'(0)
+      AxiBurstWriteEn: bit'(0),
+      TlbPartType: config_pkg::TLB_PART_OFF,
+      default: '0
   };
 
 endpackage

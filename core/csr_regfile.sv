@@ -305,11 +305,11 @@ module csr_regfile
 
   // DCache ways configured for SPM mode
   riscv::xlen_t dcache_spm_ways_q, dcache_spm_ways_d;
-  assign dcache_spm_ways_o = dcache_spm_ways_q[ariane_pkg::DCACHE_SET_ASSOC-1:0];
+  assign dcache_spm_ways_o = CVA6Cfg.DcacheSpmEn ? dcache_spm_ways_q[ariane_pkg::DCACHE_SET_ASSOC-1:0] : '0;
 
   // ICache ways configured for SPM mode
   riscv::xlen_t icache_spm_ways_q, icache_spm_ways_d;
-  assign icache_spm_ways_o = icache_spm_ways_q[ariane_pkg::ICACHE_SET_ASSOC-1:0];
+  assign icache_spm_ways_o = CVA6Cfg.IcacheSpmEn ? icache_spm_ways_q[ariane_pkg::ICACHE_SET_ASSOC-1:0] : '0;
 
   logic [CVA6Cfg.NumPartitions-1:0] cur_part_q,  cur_part_d;
   assign cur_part_o = (CVA6Cfg.TlbPartType != config_pkg::TLB_PART_OFF) ? cur_part_q : '0;

@@ -207,11 +207,13 @@ module cva6_icache
         {1'b0, (CVA6Cfg.IcacheSpmAddrBase + CVA6Cfg.IcacheSpmLength), 56'h0}
       };
     // If the ISPM is disabled everything is headed to the cache
+    // We just have to build a non-overlapping, 3-entry address map here
+    // to silence warnings
     end else begin
       icache_spm_map = {
-        {1'b0, 56'h0, 56'h0},
-        {1'b0, 56'h0, 56'h0},
-        {1'b0, 56'h0, 56'h0}
+        {1'b0, 56'h0, 56'h32},
+        {1'b0, 56'h32, 56'h64},
+        {1'b0, 56'h64, 56'h0}
       };
     end
   end
