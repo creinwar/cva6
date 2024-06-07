@@ -180,6 +180,16 @@ module cva6
 
   localparam bit NonIdemPotenceEn = CVA6Cfg.NrNonIdempotentRules && CVA6Cfg.NonIdempotentLength;  // Currently only used by V extension (Ara)
 
+
+  // Ensure that we only allow as many lockable TLB entries as we actually have in BOTH TLBs
+  localparam int unsigned NumLockableTlbEntries = (cva6_config_pkg::CVA6ConfigInstrTlbEntries >= cva6_config_pkg::CVA6ConfigDataTlbEntries) ?
+
+                                                 ((cva6_config_pkg::CVA6ConfigDataTlbEntries >= cva6_config_pkg::CVA6ConfigLockableTlbEntries) ?
+                                                   cva6_config_pkg::CVA6ConfigLockableTlbEntries : cva6_config_pkg::CVA6ConfigDataTlbEntries)
+
+                                               : ((cva6_config_pkg::CVA6ConfigInstrTlbEntries >= cva6_config_pkg::CVA6ConfigLockableTlbEntries) ?
+                                                   cva6_config_pkg::CVA6ConfigLockableTlbEntries : cva6_config_pkg::CVA6ConfigInstrTlbEntries);
+
   localparam config_pkg::cva6_cfg_t CVA6ExtendCfg = {
     CVA6Cfg.NrCommitPorts,
     CVA6Cfg.AxiAddrWidth,
@@ -242,7 +252,16 @@ module cva6
     CVA6Cfg.MaxOutstandingStores,
     CVA6Cfg.DebugEn,
     NonIdemPotenceEn,
-    CVA6Cfg.AxiBurstWriteEn
+    CVA6Cfg.AxiBurstWriteEn,
+    CVA6Cfg.TlbPartType,
+    NumLockableTlbEntries,
+    CVA6Cfg.NumPartitions,
+    CVA6Cfg.DcacheSpmEn,
+    CVA6Cfg.DcacheSpmAddrBase,
+    CVA6Cfg.DcacheSpmLength,
+    CVA6Cfg.IcacheSpmEn,
+    CVA6Cfg.IcacheSpmAddrBase,
+    CVA6Cfg.IcacheSpmLength
   };
 
 
@@ -441,8 +460,8 @@ module cva6
   logic [31:0] mcountinhibit_csr_perf;
   logic [ariane_pkg::DCACHE_SET_ASSOC-1:0] dcache_spm_ways_csr_cache;
   logic [ariane_pkg::ICACHE_SET_ASSOC-1:0] icache_spm_ways_csr_cache;
-  logic [ariane_pkg::NUM_PARTITIONS-1:0] cur_part_csr;
-  ariane_pkg::locked_tlb_entry_t[ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] locked_tlb_entries_csr_ex;
+  logic [CVA6ExtendCfg.NumPartitions-1:0] cur_part_csr;
+  ariane_pkg::locked_tlb_entry_t[CVA6ExtendCfg.NumLockableTlbEntries-1:0] locked_tlb_entries_csr_ex;
   // ----------------------------
   // Performance Counters <-> *
   // ----------------------------

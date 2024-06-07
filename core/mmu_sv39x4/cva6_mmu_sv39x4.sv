@@ -90,8 +90,8 @@ module cva6_mmu_sv39x4
     input riscv::pmpcfg_t [15:0] pmpcfg_i,
     input logic [15:0][riscv::PLEN-3:0] pmpaddr_i,
     // Partitioning support
-    input logic [ariane_pkg::NUM_PARTITIONS-1:0] cur_part_i,
-    input ariane_pkg::locked_tlb_entry_t[ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] locked_tlb_entries_i
+    input logic [CVA6Cfg.NumPartitions-1:0] cur_part_i,
+    input ariane_pkg::locked_tlb_entry_t[CVA6Cfg.NumLockableTlbEntries-1:0] locked_tlb_entries_i
 );
 
   logic iaccess_err;  // insufficient privilege to access this instruction page
@@ -130,7 +130,7 @@ module cva6_mmu_sv39x4
   logic        [riscv::GPLEN-1:0] dtlb_gpaddr;
 
   // To track where a locked entry belongs
-  ariane_pkg::locked_tlb_entry_t[ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] locked_dtlb_entries, locked_itlb_entries;
+  ariane_pkg::locked_tlb_entry_t[CVA6Cfg.NumLockableTlbEntries-1:0] locked_dtlb_entries, locked_itlb_entries;
 
   // Assignments
   assign itlb_lu_access = icache_areq_i.fetch_req;
@@ -140,14 +140,10 @@ module cva6_mmu_sv39x4
 
   // Split the incoming locked tlb entries in data/instruction lockings
   always_comb begin
-      // Filter out instruction entries for the DTLB...
-      for(int unsigned i = 0; i < ariane_pkg::NUM_TLB_LOCK_WAYS; i++) begin
+      // Filter out instruction entries for the DTLB and data entries for the ITLB
+      for(int unsigned i = 0; i < CVA6Cfg.NumLockableTlbEntries; i++) begin
           locked_dtlb_entries[i] = locked_tlb_entries_i[i];
           locked_dtlb_entries[i].valid = locked_tlb_entries_i[i].valid & locked_tlb_entries_i[i].data;
-      end
-
-      // ...and data entries for the ITLB
-      for(int unsigned i = 0; i < ariane_pkg::NUM_TLB_LOCK_WAYS; i++) begin
           locked_itlb_entries[i] = locked_tlb_entries_i[i];
           locked_itlb_entries[i].valid = locked_tlb_entries_i[i].valid & locked_tlb_entries_i[i].instr;
       end

@@ -753,14 +753,6 @@ package ariane_pkg;
 
   localparam int unsigned INSTR_TLB_ENTRIES = cva6_config_pkg::CVA6ConfigInstrTlbEntries;
   localparam int unsigned DATA_TLB_ENTRIES  = cva6_config_pkg::CVA6ConfigDataTlbEntries;
-  localparam int unsigned NUM_PARTITIONS    = cva6_config_pkg::CVA6ConfigNumPartitions;
-  localparam int unsigned MAX_PARTITIONS    = 32; // Should be enough for now
-
-  localparam int unsigned NUM_TLB_LOCK_WAYS = (INSTR_TLB_ENTRIES >= DATA_TLB_ENTRIES) ?
-                                             ((DATA_TLB_ENTRIES >= cva6_config_pkg::CVA6ConfigLockableTlbEntries) ?
-                                                cva6_config_pkg::CVA6ConfigLockableTlbEntries : DATA_TLB_ENTRIES)
-                                           : ((INSTR_TLB_ENTRIES >= cva6_config_pkg::CVA6ConfigLockableTlbEntries) ?
-                                                cva6_config_pkg::CVA6ConfigLockableTlbEntries : INSTR_TLB_ENTRIES);
 
   typedef enum logic [1:0] {
         INVALID   = 2'b00,

@@ -33,8 +33,8 @@ module cva6_tlb_sv39x4
     input logic s_st_enbl_i,  // s-stage enabled
     input logic g_st_enbl_i,  // g-stage enabled
     input logic v_i,  // virtualization mode
-    input logic [ariane_pkg::NUM_PARTITIONS-1:0] cur_part_i, // Currently active partition
-    input ariane_pkg::locked_tlb_entry_t[ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] locked_tlb_entries_i, // Locked TLB entries
+    input logic [CVA6Cfg.NumPartitions-1:0] cur_part_i, // Currently active partition
+    input ariane_pkg::locked_tlb_entry_t[CVA6Cfg.NumLockableTlbEntries-1:0] locked_tlb_entries_i, // Locked TLB entries
     // Update TLB
     input tlb_update_sv39x4_t update_i,
     // Lookup signals
@@ -99,13 +99,15 @@ module cva6_tlb_sv39x4
 
   logic [TLB_ENTRIES-1:0] replacement_allowed;
 
-  localparam clr_tlb_ratio = TLB_ENTRIES/ariane_pkg::NUM_PARTITIONS;
+  localparam clr_tlb_ratio = TLB_ENTRIES/CVA6Cfg.NumPartitions;
 
   // Figure out the currently writable TLB ways
   // I.e. the set of non-locked TLB ways which are allowed by our colour set
   always_comb begin
     for(int unsigned i = 0; i < TLB_ENTRIES; i++) begin
-      if(i < ariane_pkg::NUM_TLB_LOCK_WAYS) begin
+      if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_OFF) begin
+        replacement_allowed[i] = 1'b1;
+      end else if(i < CVA6Cfg.NumLockableTlbEntries) begin
         replacement_allowed[i] = cur_part_i[i/clr_tlb_ratio] & ~locked_tlb_entries_i[i].valid;
       end else begin
         replacement_allowed[i] = cur_part_i[i/clr_tlb_ratio];
@@ -234,7 +236,7 @@ module cva6_tlb_sv39x4
       // Locked TLB entry
       // they take precedence over everything and are never flushed until
       // they are marked as no longer valid
-      if (i < ariane_pkg::NUM_TLB_LOCK_WAYS && locked_tlb_entries_i[i].valid) begin
+      if (CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && i < CVA6Cfg.NumLockableTlbEntries && locked_tlb_entries_i[i].valid) begin
         // update tag array
         tags_n[i] = '{
           asid:       locked_tlb_entries_i[i].asid,
@@ -371,7 +373,7 @@ module cva6_tlb_sv39x4
     // But if the colour config was changed, re-init the tree
     // This makes sure the tree is in a known good state when switching
     // colours or lockings
-    if (plru_node_state_d != plru_node_state_q) begin
+    if ((CVA6Cfg.TlbPartType != config_pkg::TLB_PART_OFF) && (plru_node_state_d != plru_node_state_q)) begin
       for(int unsigned n = 0; n < (TLB_ENTRIES-1); n++) begin
         // By default everything is initialized to "left"
         // except right only nodes of course
@@ -504,7 +506,7 @@ module cva6_tlb_sv39x4
       $error("ASID width must be at least 1");
       $stop();
     end
-    assert ((ariane_pkg::NUM_PARTITIONS <= TLB_ENTRIES) && (clr_tlb_ratio == 1 || (clr_tlb_ratio & (clr_tlb_ratio - 1)) == 0))
+    assert (CVA6Cfg.TlbPartType == config_pkg::TLB_PART_OFF || ((CVA6Cfg.NumPartitions <= TLB_ENTRIES) && (clr_tlb_ratio == 1 || (clr_tlb_ratio & (clr_tlb_ratio - 1)) == 0)))
     else begin
       $error("The number of colours must be less than or equal to\
 the number of TLB entries and their ratio must be a power of two");

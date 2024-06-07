@@ -131,8 +131,8 @@ module std_nbdcache
     WRITE
   } addr_decode_state_t;
 
-  dcache_req_i_t [2:0]    cache_ports_in, dspm_ports_in, ispm_ports_out;
-  dcache_req_o_t [2:0]    cache_ports_out, dspm_ports_out, ispm_ports_in;
+  dcache_req_i_t [NumPorts-1:0]    cache_ports_in, dspm_ports_in, ispm_ports_out;
+  dcache_req_o_t [NumPorts-1:0]    cache_ports_out, dspm_ports_out, ispm_ports_in;
 
   // ------------------
   // Cache vs. SPM split
@@ -159,12 +159,38 @@ module std_nbdcache
   // but is handled by the address decoders default index
   // (which is set to CACHE)
   rule_t [3:0] dcache_spm_map;
-  assign dcache_spm_map = {
-    {CACHE_REQ, 56'h0, CVA6Cfg.DCacheSpmAddrBase},
-    {DSPM_REQ, CVA6Cfg.DCacheSpmAddrBase, (CVA6Cfg.DCacheSpmAddrBase + CVA6Cfg.DCacheSpmLength)},
-    {ISPM_REQ, CVA6Cfg.ICacheSpmAddrBase, (CVA6Cfg.ICacheSpmAddrBase + CVA6Cfg.ICacheSpmLength)},
-    {CACHE_REQ, (CVA6Cfg.ICacheSpmAddrBase + CVA6Cfg.ICacheSpmLength), 56'h0}
-  };
+
+  always_comb begin
+    if (CVA6Cfg.DcacheSpmEn && CVA6Cfg.IcacheSpmEn) begin
+      dcache_spm_map = {
+        {CACHE_REQ, 56'h0, CVA6Cfg.DcacheSpmAddrBase},
+        {DSPM_REQ, CVA6Cfg.DcacheSpmAddrBase, (CVA6Cfg.DcacheSpmAddrBase + CVA6Cfg.DcacheSpmLength)},
+        {ISPM_REQ, CVA6Cfg.IcacheSpmAddrBase, (CVA6Cfg.IcacheSpmAddrBase + CVA6Cfg.IcacheSpmLength)},
+        {CACHE_REQ, (CVA6Cfg.IcacheSpmAddrBase + CVA6Cfg.IcacheSpmLength), 56'h0}
+      };
+    end else if (CVA6Cfg.DcacheSpmEn) begin
+      dcache_spm_map = {
+        {CACHE_REQ, 56'h0, CVA6Cfg.DcacheSpmAddrBase},
+        {DSPM_REQ, CVA6Cfg.DcacheSpmAddrBase, (CVA6Cfg.DcacheSpmAddrBase + CVA6Cfg.DcacheSpmLength)},
+        {CACHE_REQ, (CVA6Cfg.DcacheSpmAddrBase + CVA6Cfg.DcacheSpmLength), 56'h0},
+        {CACHE_REQ, (CVA6Cfg.DcacheSpmAddrBase + CVA6Cfg.DcacheSpmLength), 56'h0}
+      };
+    end else if (CVA6Cfg.IcacheSpmEn) begin
+      dcache_spm_map = {
+        {CACHE_REQ, 56'h0, CVA6Cfg.IcacheSpmAddrBase},
+        {CACHE_REQ, 56'h0, CVA6Cfg.IcacheSpmAddrBase},
+        {ISPM_REQ, CVA6Cfg.IcacheSpmAddrBase, (CVA6Cfg.IcacheSpmAddrBase + CVA6Cfg.IcacheSpmLength)},
+        {CACHE_REQ, (CVA6Cfg.IcacheSpmAddrBase + CVA6Cfg.IcacheSpmLength), 56'h0}
+      };
+    end else begin
+      dcache_spm_map = {
+        {CACHE_REQ, 56'h0, 56'h0},
+        {CACHE_REQ, 56'h0, 56'h0},
+        {CACHE_REQ, 56'h0, 56'h0},
+        {CACHE_REQ, 56'h0, 56'h0}
+      };
+    end
+  end
 
   // This uses 2'b11 as "no current request" state
   logic [1:0] ispm_port_next, ispm_port_d, ispm_port_q;
@@ -178,32 +204,34 @@ module std_nbdcache
     ispm_req_o      = '{default: 0};
     ispm_ports_in   = '{default: 0};
 
-    // Lower indices are prioritized
-    for(int unsigned i = 0; i < 3; i++) begin
-      if(ispm_ports_out[i].data_req) begin
-        ispm_port_next = 2'(i);
-        break;
+    if (CVA6Cfg.IcacheSpmEn) begin
+      // Lower indices are prioritized
+      for(int unsigned i = 0; i < 3; i++) begin
+        if(ispm_ports_out[i].data_req) begin
+          ispm_port_next = 2'(i);
+          break;
+        end
       end
-    end
 
-    // Not serving a request => take the next one
-    if(ispm_port_q == 2'b11) begin
-      if(!(&ispm_port_next)) begin
-        ispm_port_d = ispm_port_next;
+      // Not serving a request => take the next one
+      if(ispm_port_q == 2'b11) begin
+        if(!(&ispm_port_next)) begin
+          ispm_port_d = ispm_port_next;
 
-        ispm_req_o = ispm_ports_out[ispm_port_next];
-        ispm_ports_in[ispm_port_next] = ispm_req_i;
-    end
+          ispm_req_o = ispm_ports_out[ispm_port_next];
+          ispm_ports_in[ispm_port_next] = ispm_req_i;
+        end
 
-    // We're still serving a request so wait for it
-    // to complete
-    end else begin
-      ispm_req_o = ispm_ports_out[ispm_port_q];
-      ispm_ports_in[ispm_port_q] = ispm_req_i;
+      // We're still serving a request so wait for it
+      // to complete
+      end else begin
+        ispm_req_o = ispm_ports_out[ispm_port_q];
+        ispm_ports_in[ispm_port_q] = ispm_req_i;
 
-      if(ispm_ports_in[ispm_port_q].data_rvalid || ispm_ports_in[ispm_port_q].data_gnt) begin
-        ispm_port_d = 2'b11;
-      end
+        if(ispm_ports_in[ispm_port_q].data_rvalid || ispm_ports_in[ispm_port_q].data_gnt) begin
+          ispm_port_d = 2'b11;
+        end
+      end // else: !if(ispm_port_q == 2'b11)
     end
   end
   `FF(ispm_port_q, ispm_port_d, 2'b11, clk_i, rst_ni)
@@ -489,30 +517,42 @@ module std_nbdcache
   // SPM Controller
   // ------------------
 
-  dspm_ctrl #(
-    .NR_PORTS       ( NumPorts                              ),
-    .NR_WAYS        ( DCACHE_SET_ASSOC                      ),
-    .LINE_WIDTH     ( DCACHE_LINE_WIDTH                     ),
-    .ADDR_WIDTH     ( DCACHE_INDEX_WIDTH                    ),
-    .MEMORY_WIDTH   ( DCACHE_TAG_WIDTH + DCACHE_LINE_WIDTH  ),
-    .IDX_WIDTH      ( DCACHE_INDEX_WIDTH                    ),
-    .NR_WAIT_STAGES ( 1                                     )
-  ) i_dspm_ctrl (
-    .clk_i,
-    .rst_ni,
-    .active_ways_i      ( dcache_spm_ways_i ),
-  
-    // Request ports
-    .spm_req_ports_i    ( dspm_ports_in   ),
-    .spm_req_ports_o    ( dspm_ports_out  ),
-  
-    .req_o              ( spm_req   ),
-    .addr_o             ( spm_addr  ),
-    .wdata_o            ( spm_wdata ),
-    .we_o               ( spm_we    ),
-    .be_o               ( spm_be    ),
-    .rdata_i            ( spm_rdata )
-  );
+  generate
+    if(CVA6Cfg.DcacheSpmEn) begin : gen_dspm_ctrl
+       dspm_ctrl #(
+         .NR_PORTS       ( NumPorts                              ),
+         .NR_WAYS        ( DCACHE_SET_ASSOC                      ),
+         .LINE_WIDTH     ( DCACHE_LINE_WIDTH                     ),
+         .ADDR_WIDTH     ( DCACHE_INDEX_WIDTH                    ),
+         .MEMORY_WIDTH   ( DCACHE_TAG_WIDTH + DCACHE_LINE_WIDTH  ),
+         .IDX_WIDTH      ( DCACHE_INDEX_WIDTH                    ),
+         .NR_WAIT_STAGES ( 1                                     )
+       ) i_dspm_ctrl (
+         .clk_i,
+         .rst_ni,
+         .active_ways_i      ( dcache_spm_ways_i ),
+         // Request ports
+         .spm_req_ports_i    ( dspm_ports_in   ),
+         .spm_req_ports_o    ( dspm_ports_out  ),
+         // Memory ports
+         .req_o              ( spm_req   ),
+         .addr_o             ( spm_addr  ),
+         .wdata_o            ( spm_wdata ),
+         .we_o               ( spm_we    ),
+         .be_o               ( spm_be    ),
+         .rdata_i            ( spm_rdata )
+       );
+    end else begin : gen_no_dspm_ctrl
+       // Tie off the unused signals
+       assign dspm_ports_out = '0;
+       assign spm_req        = '0;
+       assign spm_addr       = '0;
+       assign spm_wdata      = '0;
+       assign spm_we         = '0;
+       assign spm_be         = '0;
+    end
+  endgenerate
+
 
   // ------------------
   // Cache Controller
@@ -605,7 +645,7 @@ module std_nbdcache
   for (genvar i = 0; i < DCACHE_SET_ASSOC; i++) begin : sram_block
       always_comb begin
         // Is this cache way SPM owned?
-        if(dcache_spm_ways_i[i]) begin
+        if(CVA6Cfg.DcacheSpmEn && dcache_spm_ways_i[i]) begin
           ram_req[i]       = spm_req[i];
           ram_we[i]        = spm_we;
           ram_addr[i]      = spm_addr;
@@ -623,7 +663,6 @@ module std_nbdcache
           ram_wdata[i]     = wdata_cache.data;
           ram_tag_be[i]    = be_cache.tag;
           ram_tag_wdata[i] = wdata_cache.tag;
-
         end
       
         // Read data can be forwarded to both
@@ -640,7 +679,7 @@ module std_nbdcache
         .req_i  (ram_req[i]),
         .rst_ni (rst_ni),
         .we_i   (ram_we[i]),
-        .addr_i (ram_addr[i]),
+        .addr_i (ram_addr[i][DCACHE_INDEX_WIDTH-1:DCACHE_BYTE_OFFSET]),
         .wuser_i('0),
         .wdata_i(ram_wdata[i]),
         .be_i   (ram_be[i]),
@@ -674,14 +713,14 @@ module std_nbdcache
 
   for (genvar i = 0; i < DCACHE_SET_ASSOC; i++) begin
     // If the way is owned by the SPM it's always clean and not valid
-    assign dirty_wdata[i]              = (dcache_spm_ways_i[i]) ? '{dirty: {DCACHE_SET_ASSOC{1'b0}}, valid: 1'b0}
+    assign dirty_wdata[i]              = (CVA6Cfg.DcacheSpmEn && dcache_spm_ways_i[i]) ? '{dirty: {DCACHE_SET_ASSOC{1'b0}}, valid: 1'b0}
                                          : '{dirty: wdata_cache.dirty, valid: wdata_cache.valid};
     assign rdata_cache[i].dirty        = dirty_rdata[i].dirty;
     assign rdata_cache[i].valid        = dirty_rdata[i].valid;
 
     // Always write the zeroes of SPM owned ways to the memory array
-    assign be_valid_dirty_ram[i].valid  = be_cache.vldrty[i].valid | dcache_spm_ways_i[i];
-    assign be_valid_dirty_ram[i].dirty  = be_cache.vldrty[i].dirty | {((DCACHE_LINE_WIDTH+7)/8){dcache_spm_ways_i[i]}};
+    assign be_valid_dirty_ram[i].valid  = be_cache.vldrty[i].valid | (CVA6Cfg.DcacheSpmEn && dcache_spm_ways_i[i]);
+    assign be_valid_dirty_ram[i].dirty  = be_cache.vldrty[i].dirty | {((DCACHE_LINE_WIDTH+7)/8){(CVA6Cfg.DcacheSpmEn && dcache_spm_ways_i[i])}};
   end
 
   sram #(

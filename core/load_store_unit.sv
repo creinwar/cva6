@@ -29,9 +29,9 @@ module load_store_unit
     // TO_BE_COMPLETED - TO_BE_COMPLETED
     input logic stall_st_pending_i,
     // Currently active partitions - CSR_REGFILE
-    input logic [ariane_pkg::NUM_PARTITIONS-1:0] cur_part_i,
+    input logic [CVA6Cfg.NumPartitions-1:0] cur_part_i,
     // Data for locked TLB entries - CSR_REGFILE
-    input ariane_pkg::locked_tlb_entry_t[ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] locked_tlb_entries_i,
+    input ariane_pkg::locked_tlb_entry_t[CVA6Cfg.NumLockableTlbEntries-1:0] locked_tlb_entries_i,
     // TO_BE_COMPLETED - TO_BE_COMPLETED
     output logic no_st_pending_o,
     // TO_BE_COMPLETED - TO_BE_COMPLETED

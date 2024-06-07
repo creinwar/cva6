@@ -198,11 +198,23 @@ module cva6_icache
 
   // The address space map dividing it into ISPM and anything else
   rule_t [2:0] icache_spm_map;
-  assign icache_spm_map = {
-      {1'b0, 56'h0, CVA6Cfg.ICacheSpmAddrBase},
-      {1'b1, CVA6Cfg.ICacheSpmAddrBase, (CVA6Cfg.ICacheSpmAddrBase + CVA6Cfg.ICacheSpmLength)},
-      {1'b0, (CVA6Cfg.ICacheSpmAddrBase + CVA6Cfg.ICacheSpmLength), 56'h0}
-  };
+
+  always_comb begin
+    if (CVA6Cfg.IcacheSpmEn) begin
+      icache_spm_map = {
+        {1'b0, 56'h0, CVA6Cfg.IcacheSpmAddrBase},
+        {1'b1, CVA6Cfg.IcacheSpmAddrBase, (CVA6Cfg.IcacheSpmAddrBase + CVA6Cfg.IcacheSpmLength)},
+        {1'b0, (CVA6Cfg.IcacheSpmAddrBase + CVA6Cfg.IcacheSpmLength), 56'h0}
+      };
+    // If the ISPM is disabled everything is headed to the cache
+    end else begin
+      icache_spm_map = {
+        {1'b0, 56'h0, 56'h0},
+        {1'b0, 56'h0, 56'h0},
+        {1'b0, 56'h0, 56'h0}
+      };
+    end
+  end
 
   // We only need one bit to decide between SPM and not
   logic cur_idx;
@@ -529,7 +541,7 @@ module cva6_icache
   );
 
   always_comb begin
-    if (cur_idx) begin
+    if (CVA6Cfg.IcacheSpmEn && cur_idx) begin
       dreq_o.data = spm_port_out.data;
       dreq_o.user = '0;
     end else if (cmp_en_q) begin
@@ -554,32 +566,44 @@ module cva6_icache
   logic [ICACHE_SET_ASSOC-1:0][((ICACHE_MEMORY_WIDTH + 7)/8)-1:0] spm_be;
   logic [ICACHE_SET_ASSOC-1:0]                                    spm_we;
 
-  ispm_ctrl #(
-      .NR_WAYS        ( ICACHE_SET_ASSOC    ),
-      .LINE_WIDTH     ( ICACHE_LINE_WIDTH   ),
-      .ADDR_WIDTH     ( ICACHE_CL_IDX_WIDTH ),
-      .MEMORY_WIDTH   ( ICACHE_MEMORY_WIDTH ),
-      .IDX_WIDTH      ( ICACHE_INDEX_WIDTH  ),    // Cache index + byte offset
-      .NR_WAIT_STAGES ( 1 )
-  ) i_ispm_ctrl (
-      .clk_i,
-      .rst_ni,
-      .active_ways_i            ( icache_spm_ways_i   ),
-      // Read-only cache port
-      .icache_req_port_i        ( spm_port_in         ),
-      .icache_req_port_o        ( spm_port_out        ),
-      .icache_phys_addr_i       ( {areq_i.fetch_paddr[riscv::PLEN-1:ICACHE_INDEX_WIDTH], vaddr_q[ICACHE_INDEX_WIDTH-1:0]} ),
-      .icache_phys_addr_valid_i ( areq_i.fetch_valid  ),
-      // Read/Write port to the LSU
-      .spm_rw_req_port_i        ( ispm_req_i          ),
-      .spm_rw_req_port_o        ( ispm_req_o          ),
-      .req_o                    ( spm_req             ),
-      .addr_o                   ( spm_addr            ),
-      .wdata_o                  ( spm_wdata           ),
-      .we_o                     ( spm_we              ),
-      .be_o                     ( spm_be              ),
-      .rdata_i                  ( spm_rdata           )
-  );
+  generate
+    if(CVA6Cfg.IcacheSpmEn) begin: gen_ispm_ctrl
+      ispm_ctrl #(
+        .NR_WAYS        ( ICACHE_SET_ASSOC    ),
+        .LINE_WIDTH     ( ICACHE_LINE_WIDTH   ),
+        .ADDR_WIDTH     ( ICACHE_CL_IDX_WIDTH ),
+        .MEMORY_WIDTH   ( ICACHE_MEMORY_WIDTH ),
+        .IDX_WIDTH      ( ICACHE_INDEX_WIDTH  ),    // Cache index + byte offset
+        .NR_WAIT_STAGES ( 1 )
+      ) i_ispm_ctrl (
+        .clk_i,
+        .rst_ni,
+        .active_ways_i            ( icache_spm_ways_i   ),
+        // Read-only cache port
+        .icache_req_port_i        ( spm_port_in         ),
+        .icache_req_port_o        ( spm_port_out        ),
+        .icache_phys_addr_i       ( {areq_i.fetch_paddr[riscv::PLEN-1:ICACHE_INDEX_WIDTH], vaddr_q[ICACHE_INDEX_WIDTH-1:0]} ),
+        .icache_phys_addr_valid_i ( areq_i.fetch_valid  ),
+        // Read/Write port to the LSU
+        .spm_rw_req_port_i        ( ispm_req_i          ),
+        .spm_rw_req_port_o        ( ispm_req_o          ),
+        .req_o                    ( spm_req             ),
+        .addr_o                   ( spm_addr            ),
+        .wdata_o                  ( spm_wdata           ),
+        .we_o                     ( spm_we              ),
+        .be_o                     ( spm_be              ),
+        .rdata_i                  ( spm_rdata           )
+      );
+    end else begin : gen_no_dspm_ctrl // block: gen_ispm_ctrl
+      assign spm_port_out = '0;
+      assign ispm_req_o   = '0;
+      assign spm_req      = '0;
+      assign spm_addr     = '0;
+      assign spm_wdata    = '0;
+      assign spm_we       = '0;
+      assign spm_be       = '0;
+    end
+  endgenerate
 
 
   ///////////////////////////////////////////////////////
@@ -602,7 +626,7 @@ module cva6_icache
 
     always_comb begin
       // Is this a SPM way?
-      if(icache_spm_ways_i[i]) begin
+      if(CVA6Cfg.IcacheSpmEn && icache_spm_ways_i[i]) begin
         ram_req[i]       = spm_req[i];
         ram_we[i]        = spm_we[i];
         ram_addr[i]      = spm_addr[i];

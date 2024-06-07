@@ -165,9 +165,9 @@ module csr_regfile
     // L1 DCache SPM mapped ways - CACHE
     output logic [ariane_pkg::DCACHE_SET_ASSOC-1:0] dcache_spm_ways_o,
     // Active partitions - TLB (for now)
-    output logic[ariane_pkg::NUM_PARTITIONS-1:0] cur_part_o,
+    output logic[CVA6Cfg.NumPartitions-1:0] cur_part_o,
     // Locked TLB entries - TLB
-    output ariane_pkg::locked_tlb_entry_t [ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] locked_tlb_entries_o,
+    output ariane_pkg::locked_tlb_entry_t [CVA6Cfg.NumLockableTlbEntries-1:0] locked_tlb_entries_o,
     // Padding time of fence.t relative to time interrupt - CONTROLLER
     output logic [31:0] fence_t_pad_o,
     // Pad relative to selected source - CONTROLLER
@@ -311,13 +311,16 @@ module csr_regfile
   riscv::xlen_t icache_spm_ways_q, icache_spm_ways_d;
   assign icache_spm_ways_o = icache_spm_ways_q[ariane_pkg::ICACHE_SET_ASSOC-1:0];
 
-  logic [ariane_pkg::MAX_PARTITIONS-1:0] cur_part_q,  cur_part_d;
-  assign cur_part_o = cur_part_q;
+  logic [CVA6Cfg.NumPartitions-1:0] cur_part_q,  cur_part_d;
+  assign cur_part_o = (CVA6Cfg.TlbPartType != config_pkg::TLB_PART_OFF) ? cur_part_q : '0;
 
-  logic [ariane_pkg::MAX_PARTITIONS-1:0] last_part_q, last_part_d;
-  riscv::pte_t [ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] tlb_lock_pte_q, tlb_lock_pte_d;
-  ariane_pkg::tlb_lock_vpn_t [ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] tlb_lock_vpn_q, tlb_lock_vpn_d;
-  ariane_pkg::tlb_lock_id_t [ariane_pkg::NUM_TLB_LOCK_WAYS-1:0] tlb_lock_id_q, tlb_lock_id_d;
+  logic [CVA6Cfg.NumPartitions-1:0] last_part_q, last_part_d;
+
+  // TODO: Currently at max 8 lockable entries are supported
+  localparam TLB_LOCK_REG_WIDTH = 8;
+  riscv::pte_t [TLB_LOCK_REG_WIDTH-1:0] tlb_lock_pte_q, tlb_lock_pte_d;
+  ariane_pkg::tlb_lock_vpn_t [TLB_LOCK_REG_WIDTH-1:0] tlb_lock_vpn_q, tlb_lock_vpn_d;
+  ariane_pkg::tlb_lock_id_t [TLB_LOCK_REG_WIDTH-1:0] tlb_lock_id_q, tlb_lock_id_d;
 
   // ----------------
   // Assignments
@@ -331,21 +334,28 @@ module csr_regfile
   assign vs_o = mstatus_q.vs;
 
   // Assemble tlb lock entries
-  always_comb begin
-      for(int unsigned i = 0; i < ariane_pkg::NUM_TLB_LOCK_WAYS; i++) begin
-          locked_tlb_entries_o[i].leaf_pte    = tlb_lock_pte_q[i];
-          locked_tlb_entries_o[i].asid        =  tlb_lock_id_q[i].asid;
-          locked_tlb_entries_o[i].vmid        =  tlb_lock_id_q[i].vmid;
-          locked_tlb_entries_o[i].vpn         = tlb_lock_vpn_q[i].vpn;
-          locked_tlb_entries_o[i].g_st_enbl   = tlb_lock_vpn_q[i].g_st_enbl;
-          locked_tlb_entries_o[i].s_st_enbl   = tlb_lock_vpn_q[i].s_st_enbl;
-          locked_tlb_entries_o[i].data        = tlb_lock_vpn_q[i].data;
-          locked_tlb_entries_o[i].instr       = tlb_lock_vpn_q[i].instr;
-          locked_tlb_entries_o[i].virt_mode   = tlb_lock_vpn_q[i].virt_mode;
-          locked_tlb_entries_o[i].size        = tlb_lock_vpn_q[i].size;
-          locked_tlb_entries_o[i].valid       = tlb_lock_pte_q[i].v & (tlb_lock_vpn_q[i].size != INVALID) & tlb_lock_id_q[i].valid;
-      end
+  generate
+  if (CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK) begin: gen_locked_entries
+     always_comb begin
+        for(int unsigned i = 0; i < CVA6Cfg.NumLockableTlbEntries; i++) begin
+           locked_tlb_entries_o[i].leaf_pte    = tlb_lock_pte_q[i];
+           locked_tlb_entries_o[i].asid        =  tlb_lock_id_q[i].asid;
+           locked_tlb_entries_o[i].vmid        =  tlb_lock_id_q[i].vmid;
+           locked_tlb_entries_o[i].vpn         = tlb_lock_vpn_q[i].vpn;
+           locked_tlb_entries_o[i].g_st_enbl   = tlb_lock_vpn_q[i].g_st_enbl;
+           locked_tlb_entries_o[i].s_st_enbl   = tlb_lock_vpn_q[i].s_st_enbl;
+           locked_tlb_entries_o[i].data        = tlb_lock_vpn_q[i].data;
+           locked_tlb_entries_o[i].instr       = tlb_lock_vpn_q[i].instr;
+           locked_tlb_entries_o[i].virt_mode   = tlb_lock_vpn_q[i].virt_mode;
+           locked_tlb_entries_o[i].size        = tlb_lock_vpn_q[i].size;
+           locked_tlb_entries_o[i].valid       = tlb_lock_pte_q[i].v & (tlb_lock_vpn_q[i].size != INVALID) & tlb_lock_id_q[i].valid;
+        end
+     end
+  end else begin : gen_no_locked_entries
+     assign locked_tlb_entries_o = '0;
   end
+  endgenerate
+
 
   // ----------------
   // CSR Read logic
@@ -840,36 +850,36 @@ module csr_regfile
 
         // Resource Partitioning - Supervisor level
         // They are hidden in the VS mode
-        riscv::CSR_CUR_PART:         if(!v_q) csr_rdata = cur_part_q; else read_access_exception = 1'b1;
-        riscv::CSR_LAST_PART:        if(!v_q) csr_rdata = last_part_q; else read_access_exception = 1'b1;
-        riscv::CSR_RSTR_LAST_PART:   if(!v_q) csr_rdata = '0; else read_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_PTE_1:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 1 && !v_q) csr_rdata = tlb_lock_pte_q[0]; else read_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_VPN_1:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 1 && !v_q) csr_rdata = tlb_lock_vpn_q[0]; else read_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_ID_1:    if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 1 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[0]}; else read_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_PTE_2:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 2 && !v_q) csr_rdata = tlb_lock_pte_q[1]; else read_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_VPN_2:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 2 && !v_q) csr_rdata = tlb_lock_vpn_q[1]; else read_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_ID_2:    if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 2 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[1]}; else read_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_PTE_3:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 3 && !v_q) csr_rdata = tlb_lock_pte_q[2]; else read_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_VPN_3:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 3 && !v_q) csr_rdata = tlb_lock_vpn_q[2]; else read_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_ID_3:    if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 3 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[2]}; else read_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_PTE_4:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 4 && !v_q) csr_rdata = tlb_lock_pte_q[3]; else read_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_VPN_4:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 4 && !v_q) csr_rdata = tlb_lock_vpn_q[3]; else read_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_ID_4:    if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 4 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[3]}; else read_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_PTE_5:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 5 && !v_q) csr_rdata = tlb_lock_pte_q[4]; else read_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_VPN_5:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 5 && !v_q) csr_rdata = tlb_lock_vpn_q[4]; else read_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_ID_5:    if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 5 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[4]}; else read_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_PTE_6:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 6 && !v_q) csr_rdata = tlb_lock_pte_q[5]; else read_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_VPN_6:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 6 && !v_q) csr_rdata = tlb_lock_vpn_q[5]; else read_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_ID_6:    if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 6 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[5]}; else read_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_PTE_7:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 7 && !v_q) csr_rdata = tlb_lock_pte_q[6]; else read_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_VPN_7:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 7 && !v_q) csr_rdata = tlb_lock_vpn_q[6]; else read_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_ID_7:    if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 7 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[6]}; else read_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_PTE_8:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 8 && !v_q) csr_rdata = tlb_lock_pte_q[7]; else read_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_VPN_8:   if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 8 && !v_q) csr_rdata = tlb_lock_vpn_q[7]; else read_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_ID_8:    if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 8 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[7]}; else read_access_exception = 1'b1;
+        riscv::CSR_CUR_PART:         if(CVA6Cfg.TlbPartType != config_pkg::TLB_PART_OFF && !v_q) csr_rdata = cur_part_q; else read_access_exception = 1'b1;
+        riscv::CSR_LAST_PART:        if(CVA6Cfg.TlbPartType != config_pkg::TLB_PART_OFF && !v_q) csr_rdata = last_part_q; else read_access_exception = 1'b1;
+        riscv::CSR_RSTR_LAST_PART:   if(CVA6Cfg.TlbPartType != config_pkg::TLB_PART_OFF && !v_q) csr_rdata = '0; else read_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_PTE_1:   if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 1 && !v_q) csr_rdata = tlb_lock_pte_q[0]; else read_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_VPN_1:   if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 1 && !v_q) csr_rdata = tlb_lock_vpn_q[0]; else read_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_ID_1:    if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 1 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[0]}; else read_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_PTE_2:   if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 2 && !v_q) csr_rdata = tlb_lock_pte_q[1]; else read_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_VPN_2:   if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 2 && !v_q) csr_rdata = tlb_lock_vpn_q[1]; else read_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_ID_2:    if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 2 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[1]}; else read_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_PTE_3:   if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 3 && !v_q) csr_rdata = tlb_lock_pte_q[2]; else read_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_VPN_3:   if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 3 && !v_q) csr_rdata = tlb_lock_vpn_q[2]; else read_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_ID_3:    if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 3 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[2]}; else read_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_PTE_4:   if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 4 && !v_q) csr_rdata = tlb_lock_pte_q[3]; else read_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_VPN_4:   if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 4 && !v_q) csr_rdata = tlb_lock_vpn_q[3]; else read_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_ID_4:    if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 4 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[3]}; else read_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_PTE_5:   if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 5 && !v_q) csr_rdata = tlb_lock_pte_q[4]; else read_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_VPN_5:   if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 5 && !v_q) csr_rdata = tlb_lock_vpn_q[4]; else read_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_ID_5:    if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 5 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[4]}; else read_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_PTE_6:   if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 6 && !v_q) csr_rdata = tlb_lock_pte_q[5]; else read_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_VPN_6:   if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 6 && !v_q) csr_rdata = tlb_lock_vpn_q[5]; else read_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_ID_6:    if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 6 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[5]}; else read_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_PTE_7:   if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 7 && !v_q) csr_rdata = tlb_lock_pte_q[6]; else read_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_VPN_7:   if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 7 && !v_q) csr_rdata = tlb_lock_vpn_q[6]; else read_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_ID_7:    if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 7 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[6]}; else read_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_PTE_8:   if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 8 && !v_q) csr_rdata = tlb_lock_pte_q[7]; else read_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_VPN_8:   if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 8 && !v_q) csr_rdata = tlb_lock_vpn_q[7]; else read_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_ID_8:    if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 8 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[7]}; else read_access_exception = 1'b1;
 
-        riscv::CSR_DCACHE_SPM_WAYS:     if(!v_q) csr_rdata = dcache_spm_ways_q; else read_access_exception = 1'b1;
-        riscv::CSR_ICACHE_SPM_WAYS:     if(!v_q) csr_rdata = icache_spm_ways_q; else read_access_exception = 1'b1;
+        riscv::CSR_DCACHE_SPM_WAYS:  if(CVA6Cfg.DcacheSpmEn == bit'(1) && !v_q) csr_rdata = dcache_spm_ways_q; else read_access_exception = 1'b1;
+        riscv::CSR_ICACHE_SPM_WAYS:  if(CVA6Cfg.IcacheSpmEn == bit'(1) && !v_q) csr_rdata = icache_spm_ways_q; else read_access_exception = 1'b1;
 
         // custom (non RISC-V) cache control
         riscv::CSR_DCACHE: csr_rdata = dcache_q;
@@ -1666,20 +1676,20 @@ module csr_regfile
           else update_access_exception = 1'b1;
         end
 
-        riscv::CSR_CUR_PART:  if (!v_q) begin
-                                cur_part_d  = csr_wdata & {{riscv::XLEN-ariane_pkg::NUM_PARTITIONS{1'b0}}, {ariane_pkg::NUM_PARTITIONS{1'b1}}};
+        riscv::CSR_CUR_PART:  if (CVA6Cfg.TlbPartType != config_pkg::TLB_PART_OFF && !v_q) begin
+                                cur_part_d  = csr_wdata & {{riscv::XLEN-CVA6Cfg.NumPartitions{1'b0}}, {CVA6Cfg.NumPartitions{1'b1}}};
                                 last_part_d = cur_part_q;
                               end else begin
                                 update_access_exception = 1'b1;
                               end
 
-        riscv::CSR_LAST_PART: if (!v_q) begin
-                                last_part_d = csr_wdata & {{riscv::XLEN-ariane_pkg::NUM_PARTITIONS{1'b0}}, {ariane_pkg::NUM_PARTITIONS{1'b1}}};
+        riscv::CSR_LAST_PART: if (CVA6Cfg.TlbPartType != config_pkg::TLB_PART_OFF && !v_q) begin
+                                last_part_d = csr_wdata & {{riscv::XLEN-CVA6Cfg.NumPartitions{1'b0}}, {CVA6Cfg.NumPartitions{1'b1}}};
                               end else begin
                                 update_access_exception = 1'b1;
                               end
 
-        riscv::CSR_RSTR_LAST_PART:  if (!v_q) begin
+        riscv::CSR_RSTR_LAST_PART:  if (CVA6Cfg.TlbPartType != config_pkg::TLB_PART_OFF && !v_q) begin
                                       if(csr_wdata & 1'b1) begin
                                         cur_part_d = last_part_q;
                                       end
@@ -1687,33 +1697,33 @@ module csr_regfile
                                         update_access_exception = 1'b1;
                                     end
 
-        riscv::CSR_TLB_LOCK_PTE_1:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 1 && !v_q) tlb_lock_pte_d[0] = riscv::pte_t'(csr_wdata); else update_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_VPN_1:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 1 && !v_q) tlb_lock_vpn_d[0] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_ID_1:      if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 1 && !v_q) tlb_lock_id_d[0] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_PTE_2:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 2 && !v_q) tlb_lock_pte_d[1] = riscv::pte_t'(csr_wdata); else update_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_VPN_2:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 2 && !v_q) tlb_lock_vpn_d[1] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_ID_2:      if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 2 && !v_q) tlb_lock_id_d[1] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_PTE_3:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 3 && !v_q) tlb_lock_pte_d[2] = riscv::pte_t'(csr_wdata); else update_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_VPN_3:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 3 && !v_q) tlb_lock_vpn_d[2] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_ID_3:      if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 3 && !v_q) tlb_lock_id_d[2] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_PTE_4:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 4 && !v_q) tlb_lock_pte_d[3] = riscv::pte_t'(csr_wdata); else update_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_VPN_4:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 4 && !v_q) tlb_lock_vpn_d[3] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_ID_4:      if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 4 && !v_q) tlb_lock_id_d[3] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_PTE_5:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 5 && !v_q) tlb_lock_pte_d[4] = riscv::pte_t'(csr_wdata); else update_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_VPN_5:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 5 && !v_q) tlb_lock_vpn_d[4] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_ID_5:      if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 5 && !v_q) tlb_lock_id_d[4] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_PTE_6:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 6 && !v_q) tlb_lock_pte_d[5] = riscv::pte_t'(csr_wdata); else update_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_VPN_6:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 6 && !v_q) tlb_lock_vpn_d[5] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_ID_6:      if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 6 && !v_q) tlb_lock_id_d[5] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_PTE_7:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 7 && !v_q) tlb_lock_pte_d[6] = riscv::pte_t'(csr_wdata); else update_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_VPN_7:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 7 && !v_q) tlb_lock_vpn_d[6] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_ID_7:      if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 7 && !v_q) tlb_lock_id_d[6] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_PTE_8:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 8 && !v_q) tlb_lock_pte_d[7] = riscv::pte_t'(csr_wdata); else update_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_VPN_8:     if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 8 && !v_q) tlb_lock_vpn_d[7] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
-        riscv::CSR_TLB_LOCK_ID_8:      if(ariane_pkg::NUM_TLB_LOCK_WAYS >= 8 && !v_q) tlb_lock_id_d[7] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_PTE_1:     if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 1 && !v_q) tlb_lock_pte_d[0] = riscv::pte_t'(csr_wdata); else update_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_VPN_1:     if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 1 && !v_q) tlb_lock_vpn_d[0] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_ID_1:      if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 1 && !v_q) tlb_lock_id_d[0] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_PTE_2:     if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 2 && !v_q) tlb_lock_pte_d[1] = riscv::pte_t'(csr_wdata); else update_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_VPN_2:     if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 2 && !v_q) tlb_lock_vpn_d[1] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_ID_2:      if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 2 && !v_q) tlb_lock_id_d[1] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_PTE_3:     if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 3 && !v_q) tlb_lock_pte_d[2] = riscv::pte_t'(csr_wdata); else update_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_VPN_3:     if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 3 && !v_q) tlb_lock_vpn_d[2] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_ID_3:      if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 3 && !v_q) tlb_lock_id_d[2] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_PTE_4:     if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 4 && !v_q) tlb_lock_pte_d[3] = riscv::pte_t'(csr_wdata); else update_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_VPN_4:     if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 4 && !v_q) tlb_lock_vpn_d[3] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_ID_4:      if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 4 && !v_q) tlb_lock_id_d[3] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_PTE_5:     if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 5 && !v_q) tlb_lock_pte_d[4] = riscv::pte_t'(csr_wdata); else update_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_VPN_5:     if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 5 && !v_q) tlb_lock_vpn_d[4] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_ID_5:      if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 5 && !v_q) tlb_lock_id_d[4] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_PTE_6:     if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 6 && !v_q) tlb_lock_pte_d[5] = riscv::pte_t'(csr_wdata); else update_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_VPN_6:     if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 6 && !v_q) tlb_lock_vpn_d[5] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_ID_6:      if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 6 && !v_q) tlb_lock_id_d[5] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_PTE_7:     if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 7 && !v_q) tlb_lock_pte_d[6] = riscv::pte_t'(csr_wdata); else update_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_VPN_7:     if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 7 && !v_q) tlb_lock_vpn_d[6] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_ID_7:      if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 7 && !v_q) tlb_lock_id_d[6] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_PTE_8:     if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 8 && !v_q) tlb_lock_pte_d[7] = riscv::pte_t'(csr_wdata); else update_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_VPN_8:     if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 8 && !v_q) tlb_lock_vpn_d[7] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
+        riscv::CSR_TLB_LOCK_ID_8:      if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 8 && !v_q) tlb_lock_id_d[7] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
 
-        riscv::CSR_DCACHE_SPM_WAYS:    if(!v_q) dcache_spm_ways_d = csr_wdata & ((2**ariane_pkg::DCACHE_SET_ASSOC) - 1); else update_access_exception = 1'b1;
-        riscv::CSR_ICACHE_SPM_WAYS:    if(!v_q) icache_spm_ways_d = csr_wdata & ((2**ariane_pkg::ICACHE_SET_ASSOC) - 1); else update_access_exception = 1'b1;
+        riscv::CSR_DCACHE_SPM_WAYS:    if(CVA6Cfg.DcacheSpmEn == bit'(1) && !v_q) dcache_spm_ways_d = csr_wdata & ((2**ariane_pkg::DCACHE_SET_ASSOC) - 1); else update_access_exception = 1'b1;
+        riscv::CSR_ICACHE_SPM_WAYS:    if(CVA6Cfg.IcacheSpmEn == bit'(1) && !v_q) icache_spm_ways_d = csr_wdata & ((2**ariane_pkg::ICACHE_SET_ASSOC) - 1); else update_access_exception = 1'b1;
 
         riscv::CSR_DCACHE: dcache_d = {{riscv::XLEN - 1{1'b0}}, csr_wdata[0]};  // enable bit
         riscv::CSR_ICACHE: icache_d = {{riscv::XLEN - 1{1'b0}}, csr_wdata[0]};  // enable bit
@@ -2570,13 +2580,17 @@ module csr_regfile
       mscratch_q       <= {riscv::XLEN{1'b0}};
       mtval_q          <= {riscv::XLEN{1'b0}};
       fiom_q           <= '0;
-      cur_part_q             <= {{riscv::XLEN-ariane_pkg::NUM_PARTITIONS{1'b0}}, {ariane_pkg::NUM_PARTITIONS{1'b1}}};
-      last_part_q            <= {{riscv::XLEN-ariane_pkg::NUM_PARTITIONS{1'b0}}, {ariane_pkg::NUM_PARTITIONS{1'b1}}};
-      tlb_lock_pte_q         <= '0;
-      tlb_lock_vpn_q         <= '0;
-      tlb_lock_id_q          <= '0;
-      dcache_spm_ways_q      <= '0;
-      icache_spm_ways_q      <= '0;
+      if (CVA6Cfg.TlbPartType != config_pkg::TLB_PART_OFF) begin
+        cur_part_q             <= {{riscv::XLEN-CVA6Cfg.NumPartitions{1'b0}}, {CVA6Cfg.NumPartitions{1'b1}}};
+        last_part_q            <= {{riscv::XLEN-CVA6Cfg.NumPartitions{1'b0}}, {CVA6Cfg.NumPartitions{1'b1}}};
+      end
+      if (CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK) begin
+        tlb_lock_pte_q         <= '0;
+        tlb_lock_vpn_q         <= '0;
+        tlb_lock_id_q          <= '0;
+      end
+      if (CVA6Cfg.DcacheSpmEn) dcache_spm_ways_q      <= '0;
+      if (CVA6Cfg.IcacheSpmEn) icache_spm_ways_q      <= '0;
       dcache_q         <= {{riscv::XLEN - 1{1'b0}}, 1'b1};
       icache_q         <= {{riscv::XLEN - 1{1'b0}}, 1'b1};
       mcountinhibit_q  <= '0;
@@ -2662,13 +2676,17 @@ module csr_regfile
       mscratch_q       <= mscratch_d;
       if (CVA6Cfg.TvalEn) mtval_q <= mtval_d;
       fiom_q          <= fiom_d;
-      cur_part_q       <= cur_part_d;
-      last_part_q      <= last_part_d;
-      tlb_lock_pte_q   <= tlb_lock_pte_d;
-      tlb_lock_vpn_q   <= tlb_lock_vpn_d;
-      tlb_lock_id_q    <= tlb_lock_id_d;
-      dcache_spm_ways_q <= dcache_spm_ways_d;
-      icache_spm_ways_q <= icache_spm_ways_d;
+      if (CVA6Cfg.TlbPartType != config_pkg::TLB_PART_OFF) begin
+        cur_part_q       <= cur_part_d;
+        last_part_q      <= last_part_d;
+      end
+      if (CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK) begin
+        tlb_lock_pte_q   <= tlb_lock_pte_d;
+        tlb_lock_vpn_q   <= tlb_lock_vpn_d;
+        tlb_lock_id_q    <= tlb_lock_id_d;
+      end
+      if (CVA6Cfg.DcacheSpmEn) dcache_spm_ways_q <= dcache_spm_ways_d;
+      if (CVA6Cfg.IcacheSpmEn) icache_spm_ways_q <= icache_spm_ways_d;
       dcache_q        <= dcache_d;
       icache_q        <= icache_d;
       mcountinhibit_q <= mcountinhibit_d;

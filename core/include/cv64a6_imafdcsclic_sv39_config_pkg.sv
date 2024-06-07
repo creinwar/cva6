@@ -60,9 +60,6 @@ package cva6_config_pkg;
 
   localparam CVA6ConfigInstrTlbEntries = 16;
   localparam CVA6ConfigDataTlbEntries = 16;
-  localparam CVA6ConfigLockableTlbEntries = 8;
-
-  localparam CVA6ConfigNumPartitions = 16;
 
   localparam CVA6ConfigRASDepth = 2;
   localparam CVA6ConfigBTBEntries = 32;
@@ -157,11 +154,7 @@ package cva6_config_pkg;
       MaxOutstandingStores: unsigned'(7),
       DebugEn: bit'(1),
       NonIdemPotenceEn: bit'(0),
-      AxiBurstWriteEn: bit'(0),
-      DCacheSpmAddrBase: 56'h0180_0000,
-      DCacheSpmLength:   56'h0020_0000,
-      ICacheSpmAddrBase: 56'h01A0_0000,
-      ICacheSpmLength:   56'h0020_0000
+      AxiBurstWriteEn: bit'(0)
   };
 
 endpackage

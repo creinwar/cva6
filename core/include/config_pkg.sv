@@ -33,6 +33,13 @@ package config_pkg;
     HPDCACHE = 2
   } cache_type_t;
 
+  /// TLB real-time feature selection
+  typedef enum {
+    TLB_PART_OFF,
+    TLB_PART_ONLY,
+    TLB_PART_LOCK
+  } tlb_part_type_e;
+
   localparam NrMaxRules = 16;
 
   typedef struct packed {
@@ -158,14 +165,24 @@ package config_pkg;
     bit                          NonIdemPotenceEn;
     // AXI burst in write
     bit                          AxiBurstWriteEn;
+    // TLB partitioning support
+    tlb_part_type_e              TlbPartType;
+    // Number of concurrently lockable TLB entries supported
+    int unsigned                 NumLockableTlbEntries;
+    // Number of partitions to split the TLBs into
+    int unsigned                 NumPartitions;
+    // DCache hybrid SPM feature
+    bit                          DcacheSpmEn;
     // Base address of the DCache SPM
-    logic [55:0]                 DCacheSpmAddrBase;
+    logic [55:0]                 DcacheSpmAddrBase;
     // Length of the reserved DCache SPM region
-    logic [55:0]                 DCacheSpmLength;
+    logic [55:0]                 DcacheSpmLength;
+    // ICache hybrid SPM feature
+    bit                          IcacheSpmEn;
     // Base address of the ICache SPM
-    logic [55:0]                 ICacheSpmAddrBase;
+    logic [55:0]                 IcacheSpmAddrBase;
     // Length of the reserved ICache SPM region
-    logic [55:0]                 ICacheSpmLength;
+    logic [55:0]                 IcacheSpmLength;
   } cva6_cfg_t;
 
 
@@ -186,8 +203,8 @@ package config_pkg;
     assert (Cfg.NrExecuteRegionRules <= NrMaxRules);
     assert (Cfg.NrCachedRegionRules <= NrMaxRules);
     assert (Cfg.NrPMPEntries <= 16);
-    assert (Cfg.DCacheSpmLength > 0);
-    assert (Cfg.ICacheSpmLength > 0);
+    assert (!Cfg.DcacheSpmEn || Cfg.DcacheSpmLength > 0);
+    assert (!Cfg.IcacheSpmEn || Cfg.IcacheSpmLength > 0);
 `endif
     // pragma translate_on
   endfunction
