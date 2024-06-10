@@ -111,6 +111,7 @@ module cva6_icache
   logic [ICACHE_SET_ASSOC-1:0][FETCH_WIDTH-1:0] cl_sel;  // selected word from each cacheline
   logic [ICACHE_SET_ASSOC-1:0][FETCH_USER_WIDTH-1:0] cl_user;  // selected word from each cacheline
   logic [ICACHE_SET_ASSOC-1:0] vld_req;  // bit enable for valid regs
+  logic [ICACHE_SET_ASSOC-1:0] vld_req_cache; // the raw bit enable before SPM
   logic vld_we;  // valid bits write enable
   logic [ICACHE_SET_ASSOC-1:0] vld_wdata;  // valid bits to write
   logic [ICACHE_SET_ASSOC-1:0] vld_rdata;  // valid bits coming from valid regs
@@ -474,11 +475,25 @@ module cva6_icache
                     (inv_en)         ? mem_rtrn_i.inv.idx[ICACHE_INDEX_WIDTH-1:ICACHE_OFFSET_WIDTH] :
                                        cl_index;
 
-  assign vld_req  = (flush_en || cache_rden)        ? '1                                    :
-                    (mem_rtrn_i.inv.all && inv_en)  ? '1                                    :
-                    (mem_rtrn_i.inv.vld && inv_en)  ? icache_way_bin2oh(
-      mem_rtrn_i.inv.way
-  ) : repl_way_oh_q;
+  generate
+  if(CVA6Cfg.IcacheSpmEn) begin
+    assign vld_req_cache  = (flush_en || cache_rden)        ? '1                                    :
+                            (mem_rtrn_i.inv.all && inv_en)  ? '1                                    :
+                            (mem_rtrn_i.inv.vld && inv_en)  ? icache_way_bin2oh(
+         mem_rtrn_i.inv.way
+    ) : repl_way_oh_q;
+
+    // Filter out the SPM owned ways
+    assign vld_req = vld_req_cache & ~icache_spm_ways_i;
+
+  end else begin
+    assign vld_req  = (flush_en || cache_rden)        ? '1                                    :
+                      (mem_rtrn_i.inv.all && inv_en)  ? '1                                    :
+                      (mem_rtrn_i.inv.vld && inv_en)  ? icache_way_bin2oh(
+         mem_rtrn_i.inv.way
+    ) : repl_way_oh_q;
+  end
+  endgenerate
 
   assign vld_wdata = (cache_wren) ? '1 : '0;
 

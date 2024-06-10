@@ -192,49 +192,52 @@ module std_nbdcache
     end
   end
 
-  // This uses 2'b11 as "no current request" state
-  logic [1:0] ispm_port_next, ispm_port_d, ispm_port_q;
+  // This uses the MSB as "current request valid" bit
+  logic [$clog2(NumPorts):0] ispm_port_next, ispm_port_d, ispm_port_q;
+
 
   // I-cache spm arbitration
   // This handles which port gets forwarded to the ISPM
   always_comb begin
     ispm_port_d     = ispm_port_q;
-    ispm_port_next  = 2'b11;
+    ispm_port_next  = '0;
 
     ispm_req_o      = '{default: 0};
     ispm_ports_in   = '{default: 0};
 
     if (CVA6Cfg.IcacheSpmEn) begin
       // Lower indices are prioritized
-      for(int unsigned i = 0; i < 3; i++) begin
+      for(int unsigned i = 0; i < NumPorts; i++) begin
         if(ispm_ports_out[i].data_req) begin
-          ispm_port_next = 2'(i);
+          ispm_port_next = i;
+          ispm_port_next[$clog2(NumPorts)] = 1'b1;
           break;
         end
       end
 
       // Not serving a request => take the next one
-      if(ispm_port_q == 2'b11) begin
-        if(!(&ispm_port_next)) begin
+      if(!ispm_port_q[$clog2(NumPorts)]) begin
+        if(ispm_port_next[$clog2(NumPorts)]) begin
           ispm_port_d = ispm_port_next;
 
-          ispm_req_o = ispm_ports_out[ispm_port_next];
-          ispm_ports_in[ispm_port_next] = ispm_req_i;
+          ispm_req_o = ispm_ports_out[ispm_port_next[$clog2(NumPorts)-1:0]];
+          ispm_ports_in[ispm_port_next[$clog2(NumPorts)-1:0]] = ispm_req_i;
         end
 
       // We're still serving a request so wait for it
       // to complete
       end else begin
-        ispm_req_o = ispm_ports_out[ispm_port_q];
-        ispm_ports_in[ispm_port_q] = ispm_req_i;
+        ispm_req_o = ispm_ports_out[ispm_port_q[$clog2(NumPorts)-1:0]];
+        ispm_ports_in[ispm_port_q[$clog2(NumPorts)-1:0]] = ispm_req_i;
 
-        if(ispm_ports_in[ispm_port_q].data_rvalid || ispm_ports_in[ispm_port_q].data_gnt) begin
-          ispm_port_d = 2'b11;
+        if(ispm_ports_in[ispm_port_q[$clog2(NumPorts)-1:0]].data_rvalid ||
+           ispm_ports_in[ispm_port_q[$clog2(NumPorts)-1:0]].data_gnt) begin
+          ispm_port_d = '0;
         end
       end // else: !if(ispm_port_q == 2'b11)
     end
   end
-  `FF(ispm_port_q, ispm_port_d, 2'b11, clk_i, rst_ni)
+  `FF(ispm_port_q, ispm_port_d, '0, clk_i, rst_ni)
 
   // Address decoding logic
   // One for each port
