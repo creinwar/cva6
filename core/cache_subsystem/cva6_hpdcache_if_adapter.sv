@@ -54,6 +54,7 @@ module cva6_hpdcache_if_adapter
   //  {{{
   logic forward_store, forward_amo;
   logic hpdcache_req_is_uncacheable;
+  logic hpdcache_req_not_dspm;
   //  }}}
 
   //  Request forwarding
@@ -63,6 +64,15 @@ module cva6_hpdcache_if_adapter
     //  {{{
     if (is_load_port == 1'b1) begin : load_port_gen
       assign hpdcache_req_is_uncacheable = !config_pkg::is_inside_cacheable_regions(
+          CVA6Cfg,
+          {
+            {64 - ariane_pkg::DCACHE_TAG_WIDTH{1'b0}}
+            , cva6_req_i.address_tag
+            , {ariane_pkg::DCACHE_INDEX_WIDTH{1'b0}}
+          }
+      );
+
+      assign hpdcache_req_not_dspm = !config_pkg::is_inside_dspm_region(
           CVA6Cfg,
           {
             {64 - ariane_pkg::DCACHE_TAG_WIDTH{1'b0}}
@@ -87,7 +97,7 @@ module cva6_hpdcache_if_adapter
 
       assign hpdcache_req_abort_o = cva6_req_i.kill_req,
           hpdcache_req_tag_o = cva6_req_i.address_tag,
-          hpdcache_req_pma_o.uncacheable = hpdcache_req_is_uncacheable,
+          hpdcache_req_pma_o.uncacheable = hpdcache_req_is_uncacheable & hpdcache_req_not_dspm,
           hpdcache_req_pma_o.io = 1'b0;
 
       //    Response forwarding
@@ -144,6 +154,15 @@ module cva6_hpdcache_if_adapter
           }
       );
 
+      assign hpdcache_req_not_dspm = !config_pkg::is_inside_dspm_region(
+          CVA6Cfg,
+          {
+            {64 - ariane_pkg::DCACHE_TAG_WIDTH{1'b0}}
+            , cva6_req_i.address_tag
+            , {ariane_pkg::DCACHE_INDEX_WIDTH{1'b0}}
+          }
+      );
+
       assign amo_is_word = (cva6_amo_req_i.size == 2'b10);
       assign amo_is_word_hi = cva6_amo_req_i.operand_a[2];
       if (riscv::XLEN == 64) begin : amo_data_64_gen
@@ -168,7 +187,7 @@ module cva6_hpdcache_if_adapter
       assign hpdcache_req_o.need_rsp = forward_amo;
       assign hpdcache_req_o.phys_indexed = 1'b1;
       assign hpdcache_req_o.addr_tag = forward_amo ? amo_tag : cva6_req_i.address_tag;
-      assign hpdcache_req_o.pma.uncacheable = hpdcache_req_is_uncacheable;
+      assign hpdcache_req_o.pma.uncacheable = hpdcache_req_is_uncacheable & hpdcache_req_not_dspm;
       assign hpdcache_req_o.pma.io = 1'b0;
       assign hpdcache_req_abort_o = 1'b0;  // unused on physically indexed requests
       assign hpdcache_req_tag_o = '0;  // unused on physically indexed requests

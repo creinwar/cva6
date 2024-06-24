@@ -41,6 +41,7 @@ module cva6_hpdcache_subsystem
     //  I$
     //  {{{
     input logic icache_en_i,  // enable icache (or bypass e.g: in debug mode)
+    input logic [ariane_pkg::ICACHE_SET_ASSOC-1:0] icache_spm_ways_i, // from CSR
     input logic icache_flush_i,  // flush the icache, flush and kill have to be asserted together
     output logic icache_miss_o,  // to performance counter
     // address translation requests
@@ -55,6 +56,7 @@ module cva6_hpdcache_subsystem
     //  {{{
     //    Cache management
     input logic dcache_enable_i,  // from CSR
+    input logic [ariane_pkg::DCACHE_SET_ASSOC-1:0] dcache_spm_ways_i, // from CSR
     input logic dcache_flush_i,  // high until acknowledged
     output logic                       dcache_flush_ack_o,     // send a single cycle acknowledge signal when the cache is flushed
     output logic dcache_miss_o,  // we missed on a ld/st
@@ -115,7 +117,7 @@ module cva6_hpdcache_subsystem
       .busy_o        (),
       .stall_i       (1'b0),
       .init_ni       (1'b0),
-      .icache_spm_ways_i('0),
+      .icache_spm_ways_i,
       .areq_i        (icache_areq_i),
       .areq_o        (icache_areq_o),
       .dreq_i        (icache_dreq_i),
@@ -462,13 +464,20 @@ module cva6_hpdcache_subsystem
       .wbuf_empty_o(wbuffer_empty_o),
 
       .cfg_enable_i                       (dcache_enable_i),
-      .cfg_wbuf_threshold_i               (4'd2),
+      .cfg_wbuf_threshold_i               (3'd2),
       .cfg_wbuf_reset_timecnt_on_write_i  (1'b1),
       .cfg_wbuf_sequential_waw_i          (1'b0),
       .cfg_wbuf_inhibit_write_coalescing_i(1'b0),
       .cfg_prefetch_updt_plru_i           (1'b1),
       .cfg_error_on_cacheable_amo_i       (1'b0),
-      .cfg_rtab_single_entry_i            (1'b0)
+      .cfg_rtab_single_entry_i            (1'b0),
+      .cfg_enable_dspm_i                  (CVA6Cfg.DcacheSpmEn),
+      .cfg_enable_ispm_i                  (CVA6Cfg.IcacheSpmEn),
+      .cfg_dspm_ways_i                    (dcache_spm_ways_i),
+      .cfg_dspm_start_i                   (CVA6Cfg.DcacheSpmAddrBase),
+      .cfg_dspm_length_i                  (CVA6Cfg.DcacheSpmLength),
+      .cfg_ispm_start_i                   (CVA6Cfg.IcacheSpmAddrBase),
+      .cfg_ispm_length_i                  (CVA6Cfg.IcacheSpmLength)
   );
 
   assign dcache_miss_o = dcache_read_miss, wbuffer_not_ni_o = wbuffer_empty_o;

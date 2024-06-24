@@ -1214,6 +1214,7 @@ module cva6
         .rst_ni(rst_ni),
 
         .icache_en_i   (icache_en_csr),
+        .icache_spm_ways_i (icache_spm_ways_csr_cache),
         .icache_flush_i(icache_flush_ctrl_cache),
         .icache_miss_o (icache_miss_cache_perf),
         .icache_areq_i (icache_areq_ex_cache),
@@ -1222,6 +1223,7 @@ module cva6
         .icache_dreq_o (icache_dreq_cache_if),
 
         .dcache_enable_i   (dcache_en_csr_nbdcache),
+        .dcache_spm_ways_i (dcache_spm_ways_csr_cache),
         .dcache_flush_i    (dcache_flush_ctrl_cache),
         .dcache_flush_ack_o(dcache_flush_ack_cache_ctrl),
         .dcache_miss_o     (dcache_miss_cache_perf),
