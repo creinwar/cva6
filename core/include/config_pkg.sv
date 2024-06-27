@@ -244,8 +244,9 @@ package config_pkg;
     return |pass;
   endfunction : is_inside_cacheable_regions
 
-  function automatic logic is_inside_dspm_region(cva6_cfg_t Cfg, logic [63:0] address);
-    return range_check(Cfg.DcacheSpmAddrBase, Cfg.DcacheSpmLength, address);
-  endfunction : is_inside_dspm_region
+  function automatic logic is_inside_spm_regions(cva6_cfg_t Cfg, logic [63:0] address);
+    return (Cfg.DcacheSpmEn & range_check(Cfg.DcacheSpmAddrBase, Cfg.DcacheSpmLength, address)) |
+           (Cfg.IcacheSpmEn & range_check(Cfg.IcacheSpmAddrBase, Cfg.IcacheSpmLength, address));
+  endfunction : is_inside_spm_regions
 
 endpackage

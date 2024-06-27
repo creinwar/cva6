@@ -54,7 +54,7 @@ module cva6_hpdcache_if_adapter
   //  {{{
   logic forward_store, forward_amo;
   logic hpdcache_req_is_uncacheable;
-  logic hpdcache_req_not_dspm;
+  logic hpdcache_req_not_spm;
   //  }}}
 
   //  Request forwarding
@@ -72,7 +72,7 @@ module cva6_hpdcache_if_adapter
           }
       );
 
-      assign hpdcache_req_not_dspm = !config_pkg::is_inside_dspm_region(
+      assign hpdcache_req_not_spm = !config_pkg::is_inside_spm_regions(
           CVA6Cfg,
           {
             {64 - ariane_pkg::DCACHE_TAG_WIDTH{1'b0}}
@@ -97,7 +97,7 @@ module cva6_hpdcache_if_adapter
 
       assign hpdcache_req_abort_o = cva6_req_i.kill_req,
           hpdcache_req_tag_o = cva6_req_i.address_tag,
-          hpdcache_req_pma_o.uncacheable = hpdcache_req_is_uncacheable & hpdcache_req_not_dspm,
+          hpdcache_req_pma_o.uncacheable = hpdcache_req_is_uncacheable & hpdcache_req_not_spm,
           hpdcache_req_pma_o.io = 1'b0;
 
       //    Response forwarding
@@ -154,7 +154,7 @@ module cva6_hpdcache_if_adapter
           }
       );
 
-      assign hpdcache_req_not_dspm = !config_pkg::is_inside_dspm_region(
+      assign hpdcache_req_not_spm = !config_pkg::is_inside_spm_regions(
           CVA6Cfg,
           {
             {64 - ariane_pkg::DCACHE_TAG_WIDTH{1'b0}}
@@ -187,7 +187,7 @@ module cva6_hpdcache_if_adapter
       assign hpdcache_req_o.need_rsp = forward_amo;
       assign hpdcache_req_o.phys_indexed = 1'b1;
       assign hpdcache_req_o.addr_tag = forward_amo ? amo_tag : cva6_req_i.address_tag;
-      assign hpdcache_req_o.pma.uncacheable = hpdcache_req_is_uncacheable & hpdcache_req_not_dspm;
+      assign hpdcache_req_o.pma.uncacheable = hpdcache_req_is_uncacheable & hpdcache_req_not_spm;
       assign hpdcache_req_o.pma.io = 1'b0;
       assign hpdcache_req_abort_o = 1'b0;  // unused on physically indexed requests
       assign hpdcache_req_tag_o = '0;  // unused on physically indexed requests

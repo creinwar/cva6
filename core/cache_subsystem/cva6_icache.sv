@@ -713,7 +713,7 @@ module cva6_icache
         .addr_i (ram_addr[i]),
         .wuser_i(mem_rtrn_i.user),
         .wdata_i(ram_wdata[i]),
-        .be_i   ('1),
+        .be_i   (ram_be[i]),
         .ruser_o(cl_ruser[i]),
         .rdata_o(ram_rdata[i])
     );

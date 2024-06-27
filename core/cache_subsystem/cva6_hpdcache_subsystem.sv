@@ -105,6 +105,40 @@ module cva6_hpdcache_subsystem
 
   localparam int ICACHE_RDTXID = 1 << (ariane_pkg::MEM_TID_WIDTH - 1);
 
+  ariane_pkg::dcache_req_i_t icache_lsu_ispm;
+  ariane_pkg::dcache_req_o_t icache_ispm_lsu;
+
+  logic                        ispm_req_valid;
+  logic                        ispm_req_ready;
+  hpdcache_pkg::hpdcache_req_t ispm_req;
+  logic                        ispm_req_abort;
+  hpdcache_pkg::hpdcache_tag_t ispm_req_tag;
+  hpdcache_pkg::hpdcache_pma_t ispm_req_pma;
+  logic                        ispm_rsp_valid;
+  hpdcache_pkg::hpdcache_rsp_t ispm_rsp;
+
+  // Connect up the HPD cache ISPM interface to the I$ ISPM interface
+  always_comb begin
+     icache_lsu_ispm.address_index = ispm_req.addr_offset;
+     icache_lsu_ispm.address_tag   = ispm_req.phys_indexed ? ispm_req.addr_tag : ispm_req_tag;
+     icache_lsu_ispm.data_wdata    = ispm_req.wdata;
+     icache_lsu_ispm.data_wuser    = '0;
+     icache_lsu_ispm.data_req      = ispm_req_valid;
+     icache_lsu_ispm.data_we       = ispm_req.op == hpdcache_pkg::HPDCACHE_REQ_STORE;
+     icache_lsu_ispm.data_be       = ispm_req.be;
+     icache_lsu_ispm.data_size     = ispm_req.size;
+     icache_lsu_ispm.data_id       = ispm_req.tid;
+     icache_lsu_ispm.kill_req      = ispm_req_abort;
+     icache_lsu_ispm.tag_valid     = ispm_req_valid;
+
+     ispm_rsp.rdata                = icache_ispm_lsu.data_rdata;
+     ispm_rsp.sid                  = ispm_req.sid;
+     ispm_rsp.tid                  = icache_ispm_lsu.data_rid;
+     ispm_rsp.error                = '0;
+     ispm_rsp.aborted              = ispm_req_abort;
+     ispm_rsp_valid                = icache_ispm_lsu.data_gnt | icache_ispm_lsu.data_rvalid;
+  end
+
   cva6_icache #(
       .CVA6Cfg(CVA6Cfg),
       .RdTxId (ICACHE_RDTXID)
@@ -122,8 +156,8 @@ module cva6_hpdcache_subsystem
       .areq_o        (icache_areq_o),
       .dreq_i        (icache_dreq_i),
       .dreq_o        (icache_dreq_o),
-      .ispm_req_i    ('0),
-      .ispm_req_o    (),
+      .ispm_req_i    (icache_lsu_ispm),
+      .ispm_req_o    (icache_ispm_lsu),
       .mem_rtrn_vld_i(icache_miss_resp_valid),
       .mem_rtrn_i    (icache_miss_resp),
       .mem_data_req_o(icache_miss_valid),
@@ -408,6 +442,16 @@ module cva6_hpdcache_subsystem
 
       .core_rsp_valid_o(dcache_rsp_valid),
       .core_rsp_o      (dcache_rsp),
+
+      .ispm_req_valid_o(ispm_req_valid),
+      .ispm_req_ready_i(ispm_req_ready),
+      .ispm_req_o      (ispm_req),
+      .ispm_req_abort_o(ispm_req_abort),
+      .ispm_req_tag_o  (ispm_req_tag),
+      .ispm_req_pma_o  (ispm_req_pma),
+
+      .ispm_rsp_valid_i(ispm_rsp_valid),
+      .ispm_rsp_i      (ispm_rsp),
 
       .mem_req_miss_read_ready_i(dcache_miss_ready),
       .mem_req_miss_read_valid_o(dcache_miss_valid),
