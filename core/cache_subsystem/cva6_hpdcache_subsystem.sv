@@ -109,7 +109,6 @@ module cva6_hpdcache_subsystem
   ariane_pkg::dcache_req_o_t icache_ispm_lsu;
 
   logic                        ispm_req_valid;
-  logic                        ispm_req_ready;
   hpdcache_pkg::hpdcache_req_t ispm_req;
   logic                        ispm_req_abort;
   hpdcache_pkg::hpdcache_tag_t ispm_req_tag;
@@ -444,7 +443,6 @@ module cva6_hpdcache_subsystem
       .core_rsp_o      (dcache_rsp),
 
       .ispm_req_valid_o(ispm_req_valid),
-      .ispm_req_ready_i(ispm_req_ready),
       .ispm_req_o      (ispm_req),
       .ispm_req_abort_o(ispm_req_abort),
       .ispm_req_tag_o  (ispm_req_tag),

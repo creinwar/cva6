@@ -50,14 +50,14 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
     input  logic [NR_WAYS-1:0][MEMORY_WIDTH-1:0]    rdata_i
 );
 
-    localparam WAY_INDEX_BITS = $clog2(NR_WAYS); 
+    localparam WAY_INDEX_BITS = $clog2(NR_WAYS);
     localparam UNUSABLE_WIDTH = MEMORY_WIDTH - LINE_WIDTH;
     logic [WAY_INDEX_BITS-1:0] fetch_way_idx;
     logic [WAY_INDEX_BITS-1:0] lsu_way_idx, lsu_way_idx_d, lsu_way_idx_q;
     logic busy;
 
     logic [$clog2(NR_WAIT_STAGES)-1:0] lsu_wait_stage_d, lsu_wait_stage_q;
-    
+
     logic [LINE_WIDTH-1:0] write_line;
 
     logic [$clog2(LINE_WIDTH/8)-$clog2(riscv::XLEN/8)-1:0] lsu_cl_offset, lsu_cl_offset_d, lsu_cl_offset_q;
@@ -73,10 +73,12 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
     logic [NR_WAYS-1:0]                     lsu_we;
     logic [NR_WAYS-1:0][((MEMORY_WIDTH + 7)/8)-1:0] lsu_be;
 
+    logic [ariane_pkg::DCACHE_TID_WIDTH-1:0] lsu_tid_d, lsu_tid_q;
+
     // Static assignments
     assign fetch_way_idx    = icache_phys_addr_i[ICACHE_INDEX_WIDTH +: WAY_INDEX_BITS];
     assign fetch_cl_offset  = icache_phys_addr_i[$clog2(LINE_WIDTH/8)-1:$clog2(FETCH_WIDTH/8)];
-    
+
     assign lsu_way_idx      = spm_rw_req_port_i.address_tag[0 +: WAY_INDEX_BITS];
     assign lsu_cl_offset    = spm_rw_req_port_i.address_index[$clog2(LINE_WIDTH/8)-1:$clog2(riscv::XLEN/8)];
 
@@ -194,6 +196,7 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
     // LSU port - largely copied from dspm_ctrl.sv
     always_comb begin
         lsu_cl_offset_d     = lsu_cl_offset_q;
+        lsu_tid_d           = lsu_tid_q;
         lsu_wait_stage_d    = lsu_wait_stage_q;
         lsu_way_idx_d       = lsu_way_idx_q;
 
@@ -212,6 +215,9 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
             lsu_wait_stage_d = lsu_wait_stage_q - 32'b1;
 
         if (spm_rw_req_port_i.data_req && lsu_wait_stage_q == '0 && !busy) begin
+            // Record the transaction ID of this request
+            lsu_tid_d     = spm_rw_req_port_i.data_id;
+
             lsu_way_idx_d = lsu_way_idx;
 
             // Reset the counter on every new request
@@ -231,6 +237,7 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
                 spm_rw_req_port_o.data_rdata    = 64'hCA11AB1E_BADCAB1E;
                 spm_rw_req_port_o.data_gnt      = spm_rw_req_port_i.data_we;
                 spm_rw_req_port_o.data_rvalid   = ~spm_rw_req_port_i.data_we;
+                spm_rw_req_port_o.data_rid      = spm_rw_req_port_i.data_id;
 
                 // We don't need to wait for the memory here, as we did not access any
                 lsu_wait_stage_d = '0;
@@ -242,6 +249,7 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
             spm_rw_req_port_o.data_gnt      = spm_rw_req_port_i.data_we;
             spm_rw_req_port_o.data_rvalid   = ~spm_rw_req_port_i.data_we;
             spm_rw_req_port_o.data_rdata    = rdata_i[lsu_way_idx_q][(lsu_cl_offset_q * riscv::XLEN) +: riscv::XLEN];
+            spm_rw_req_port_o.data_rid      = lsu_tid_q;
 
         // Same cycle acknowledge => Use the unregistered version
         end else if(NR_WAIT_STAGES == 0) begin
@@ -249,10 +257,12 @@ module ispm_ctrl import wt_cache_pkg::*; import ariane_pkg::*; #(
             spm_rw_req_port_o.data_gnt      = spm_rw_req_port_i.data_we;
             spm_rw_req_port_o.data_rvalid   = ~spm_rw_req_port_i.data_we;
             spm_rw_req_port_o.data_rdata    = rdata_i[lsu_way_idx][(lsu_cl_offset * riscv::XLEN) +: riscv::XLEN];
+            spm_rw_req_port_o.data_rid      = spm_rw_req_port_i.data_id;
         end
     end
 
     `FF(lsu_cl_offset_q, lsu_cl_offset_d, '0, clk_i, rst_ni)
+    `FF(lsu_tid_q, lsu_tid_d, '0, clk_i, rst_ni)
     `FF(lsu_wait_stage_q, lsu_wait_stage_d, '0, clk_i, rst_ni)
     `FF(lsu_way_idx_q, lsu_way_idx_d, '0, clk_i, rst_ni)
 

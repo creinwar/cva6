@@ -190,6 +190,11 @@ module cva6
                                                : ((cva6_config_pkg::CVA6ConfigInstrTlbEntries >= cva6_config_pkg::CVA6ConfigLockableTlbEntries) ?
                                                    cva6_config_pkg::CVA6ConfigLockableTlbEntries : cva6_config_pkg::CVA6ConfigInstrTlbEntries);
 
+  // If the user enabled the ISPM we automatically add it to the executable regions
+  localparam [config_pkg::NrMaxRules-1:0][63:0] ExecuteRegionAddrBase = CVA6Cfg.IcacheSpmEn ? {CVA6Cfg.ExecuteRegionAddrBase, CVA6Cfg.IcacheSpmAddrBase}
+                                                                                            :  CVA6Cfg.ExecuteRegionAddrBase;
+  localparam [config_pkg::NrMaxRules-1:0][63:0] ExecuteRegionLength   = CVA6Cfg.IcacheSpmEn ? {CVA6Cfg.ExecuteRegionLength, CVA6Cfg.IcacheSpmLength}
+                                                                                            :  CVA6Cfg.ExecuteRegionLength;
   localparam config_pkg::cva6_cfg_t CVA6ExtendCfg = {
     CVA6Cfg.NrCommitPorts,
     CVA6Cfg.AxiAddrWidth,
