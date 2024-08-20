@@ -322,6 +322,9 @@ module csr_regfile
   ariane_pkg::tlb_lock_vpn_t [TLB_LOCK_REG_WIDTH-1:0] tlb_lock_vpn_q, tlb_lock_vpn_d;
   ariane_pkg::tlb_lock_id_t [TLB_LOCK_REG_WIDTH-1:0] tlb_lock_id_q, tlb_lock_id_d;
 
+  // Scheduling debugging register (basically a scratch reg)
+  riscv::xlen_t sched_debug_q, sched_debug_d;
+
   // ----------------
   // Assignments
   // ----------------
@@ -878,6 +881,8 @@ module csr_regfile
         riscv::CSR_TLB_LOCK_VPN_8:   if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 8 && !v_q) csr_rdata = tlb_lock_vpn_q[7]; else read_access_exception = 1'b1;
         riscv::CSR_TLB_LOCK_ID_8:    if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 8 && !v_q) csr_rdata = {32'b0, tlb_lock_id_q[7]}; else read_access_exception = 1'b1;
 
+	riscv::CSR_SCHED_DEBUG: csr_rdata = sched_debug_q;
+
         riscv::CSR_DCACHE_SPM_WAYS:  if(CVA6Cfg.DcacheSpmEn == bit'(1) && !v_q) csr_rdata = dcache_spm_ways_q; else read_access_exception = 1'b1;
         riscv::CSR_ICACHE_SPM_WAYS:  if(CVA6Cfg.IcacheSpmEn == bit'(1) && !v_q) csr_rdata = icache_spm_ways_q; else read_access_exception = 1'b1;
 
@@ -1023,6 +1028,7 @@ module csr_regfile
     tlb_lock_pte_d = tlb_lock_pte_q;
     tlb_lock_vpn_d = tlb_lock_vpn_q;
     tlb_lock_id_d = tlb_lock_id_q;
+    sched_debug_d = sched_debug_q;
     dcache_spm_ways_d = dcache_spm_ways_q;
     icache_spm_ways_d = icache_spm_ways_q;
     dcache_d = dcache_q;
@@ -1721,6 +1727,8 @@ module csr_regfile
         riscv::CSR_TLB_LOCK_PTE_8:     if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 8 && !v_q) tlb_lock_pte_d[7] = riscv::pte_t'(csr_wdata); else update_access_exception = 1'b1;
         riscv::CSR_TLB_LOCK_VPN_8:     if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 8 && !v_q) tlb_lock_vpn_d[7] = ariane_pkg::tlb_lock_vpn_t'(csr_wdata); else update_access_exception = 1'b1;
         riscv::CSR_TLB_LOCK_ID_8:      if(CVA6Cfg.TlbPartType == config_pkg::TLB_PART_LOCK && CVA6Cfg.NumLockableTlbEntries >= 8 && !v_q) tlb_lock_id_d[7] = ariane_pkg::tlb_lock_id_t'(csr_wdata[31:0]); else update_access_exception = 1'b1;
+
+	riscv::CSR_SCHED_DEBUG: sched_debug_d = csr_wdata;
 
         riscv::CSR_DCACHE_SPM_WAYS:    if(CVA6Cfg.DcacheSpmEn == bit'(1) && !v_q) dcache_spm_ways_d = csr_wdata & ((2**ariane_pkg::DCACHE_SET_ASSOC) - 1); else update_access_exception = 1'b1;
         riscv::CSR_ICACHE_SPM_WAYS:    if(CVA6Cfg.IcacheSpmEn == bit'(1) && !v_q) icache_spm_ways_d = csr_wdata & ((2**ariane_pkg::ICACHE_SET_ASSOC) - 1); else update_access_exception = 1'b1;
@@ -2589,6 +2597,7 @@ module csr_regfile
         tlb_lock_vpn_q         <= '0;
         tlb_lock_id_q          <= '0;
       end
+      sched_debug_q    <= '0;
       if (CVA6Cfg.DcacheSpmEn) dcache_spm_ways_q      <= '0;
       if (CVA6Cfg.IcacheSpmEn) icache_spm_ways_q      <= '0;
       dcache_q         <= {{riscv::XLEN - 1{1'b0}}, 1'b1};
@@ -2685,6 +2694,7 @@ module csr_regfile
         tlb_lock_vpn_q   <= tlb_lock_vpn_d;
         tlb_lock_id_q    <= tlb_lock_id_d;
       end
+      sched_debug_q   <= sched_debug_d;
       if (CVA6Cfg.DcacheSpmEn) dcache_spm_ways_q <= dcache_spm_ways_d;
       if (CVA6Cfg.IcacheSpmEn) icache_spm_ways_q <= icache_spm_ways_d;
       dcache_q        <= dcache_d;

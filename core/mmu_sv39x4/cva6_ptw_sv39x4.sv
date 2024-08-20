@@ -35,7 +35,7 @@ module cva6_ptw_sv39x4
     output logic walking_instr_o,  // set when walking for TLB
     output logic ptw_error_o,  // set when an error occurred
     output logic ptw_error_at_g_st_o,  // set when an error occurred at the G-Stage
-    output logic                    ptw_err_at_g_int_st_o,  // set when an error occurred at the G-Stage during S-Stage translation
+    output logic ptw_err_at_g_int_st_o,  // set when an error occurred at the G-Stage during S-Stage translation
     output logic ptw_access_exception_o,  // set when an PMP access exception occured
     input logic enable_translation_i,  // CSRs indicate to enable SV39 VS-Stage translation
     input logic enable_g_translation_i,  // CSRs indicate to enable SV39  G-Stage translation
@@ -153,6 +153,10 @@ module cva6_ptw_sv39x4
   assign req_port_o.kill_req = '0;
   // we are never going to write with the HPTW
   assign req_port_o.data_wdata = 64'b0;
+  assign req_port_o.data_wuser = '0;
+  // We always only issue one transaction at a time
+  assign req_port_o.data_id    = '0;
+
 
   // -----------
   // TLB Update
