@@ -506,12 +506,12 @@ module cva6_mmu_sv39x4
       // Mega page
       if (dtlb_is_2M_q) begin
         lsu_paddr_o[20:12]    = lsu_vaddr_q[20:12];
-        lsu_dtlb_ppn_o[20:12] =  lsu_vaddr_n[20:12];
+        lsu_dtlb_ppn_o[8:0] =  lsu_vaddr_n[20:12];
       end
       // Giga page
       if (dtlb_is_1G_q) begin
         lsu_paddr_o[PPNWMin:12]    = lsu_vaddr_q[PPNWMin:12];
-        lsu_dtlb_ppn_o[PPNWMin:12] =  lsu_vaddr_n[PPNWMin:12];
+        lsu_dtlb_ppn_o[PPNWMin-12:0] =  lsu_vaddr_n[PPNWMin:12];
       end
       // ---------
       // DTLB Hit
